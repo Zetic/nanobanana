@@ -23,8 +23,15 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents)
 
-# Initialize image generator
-image_generator = ImageGenerator()
+# Initialize image generator (will be created when first used)
+image_generator = None
+
+def get_image_generator():
+    """Get or create the image generator instance."""
+    global image_generator
+    if image_generator is None:
+        image_generator = ImageGenerator()
+    return image_generator
 
 @bot.event
 async def on_ready():
@@ -92,13 +99,13 @@ async def handle_generation_request(message):
             
             # Generate image with both text and image input
             await status_msg.edit(content="🎨 Generating image with AI...")
-            generated_image = await image_generator.generate_image_from_text_and_image(
+            generated_image = await get_image_generator().generate_image_from_text_and_image(
                 text_content, stitched_image
             )
         else:
             # Generate image from text only
             await status_msg.edit(content="🎨 Generating image from text...")
-            generated_image = await image_generator.generate_image_from_text(text_content)
+            generated_image = await get_image_generator().generate_image_from_text(text_content)
         
         if generated_image:
             # Save and send the generated image
@@ -143,8 +150,8 @@ async def handle_generation_request(message):
         except:
             pass
 
-@bot.command(name='help')
-async def help_command(ctx):
+@bot.command(name='info')
+async def info_command(ctx):
     """Show help information."""
     embed = discord.Embed(
         title="🍌 Nano Banana Bot - Help",

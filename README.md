@@ -65,7 +65,7 @@ python main.py
 
 ### Available Commands
 
-- `!help` - Show help information
+- `!info` - Show help information
 - `!status` - Display bot status
 
 ## 🛠️ Configuration
