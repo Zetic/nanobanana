@@ -447,9 +447,21 @@ class ProcessRequestView(discord.ui.View):
                     embed.description = "**Mode:** Transforming and enhancing images"
                     embed.set_footer(text=f"Processing {len(self.images)} input image(s)")
                 
+                # Add input image to embed if available
+                attachments = []
+                if self.images:
+                    # Show the first input image in the embed during processing
+                    img_buffer = io.BytesIO()
+                    self.images[0].save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+                    input_filename = f"processing_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    file = discord.File(img_buffer, filename=input_filename)
+                    embed.set_image(url=f"attachment://{input_filename}")
+                    attachments.append(file)
+                
                 embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
                     
-                await interaction.response.edit_message(embed=embed, view=self)
+                await interaction.response.edit_message(embed=embed, view=self, attachments=attachments)
             else:
                 # For template applied case, just update the existing embed
                 embed = discord.Embed(
@@ -460,10 +472,17 @@ class ProcessRequestView(discord.ui.View):
                 embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
                 if self.images:
                     embed.set_footer(text=f"Using {len(self.images)} input image(s) with sticker template")
+                    # Show the first input image in the embed during sticker processing
+                    img_buffer = io.BytesIO()
+                    self.images[0].save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+                    input_filename = f"sticker_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    file = discord.File(img_buffer, filename=input_filename)
+                    embed.set_image(url=f"attachment://{input_filename}")
+                    await interaction.edit_original_response(embed=embed, view=self, attachments=[file])
                 else:
                     embed.set_footer(text="Generating sticker from text prompt")
-                    
-                await interaction.edit_original_response(embed=embed, view=self)
+                    await interaction.edit_original_response(embed=embed, view=self)
             
             # Generate the image based on available inputs
             generated_image = None
@@ -506,7 +525,7 @@ class ProcessRequestView(discord.ui.View):
                     timestamp=timestamp
                 )
                 
-                # Add to existing outputs to create history
+                # Add to existing outputs to create history (input images first, then generated)
                 all_outputs = self.existing_outputs + [new_output]
                 
                 # Create final embed with result
@@ -541,7 +560,15 @@ class ProcessRequestView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.images)
+                # Pass original images from existing outputs if available
+                original_images_for_view = self.images
+                if self.existing_outputs:
+                    # Extract original PIL images from input OutputItems for the view
+                    original_images_for_view = [output.image for output in self.existing_outputs if "input_" in output.filename]
+                    if not original_images_for_view:
+                        original_images_for_view = self.images
+                
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
@@ -656,6 +683,28 @@ async def handle_generation_request(message):
             await message.add_reaction('❌')
             return
         
+        # Delete the original message after processing inputs
+        try:
+            await message.delete()
+            logger.info("Deleted original user message")
+        except Exception as e:
+            logger.warning(f"Could not delete original message: {e}")
+            # Continue processing even if deletion fails
+        
+        # Convert input images to OutputItems for cycling interface
+        input_outputs = []
+        if images:
+            for i, img in enumerate(images):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                input_output = OutputItem(
+                    image=img,
+                    filename=f"input_{i}_{timestamp}.png",
+                    prompt_used="Input image",
+                    timestamp=timestamp
+                )
+                input_outputs.append(input_output)
+            logger.info(f"Created {len(input_outputs)} input outputs for cycling")
+        
         # Create preview embed with the request details
         embed = discord.Embed(
             title="🎨 Image Generation Request - Nano Banana Bot",
@@ -663,10 +712,19 @@ async def handle_generation_request(message):
         )
         
         # Set description based on what inputs we have
+        attachments = []
         if text_content and images:
             embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
             embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
             embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
+            # Show first input image in embed
+            img_buffer = io.BytesIO()
+            images[0].save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            preview_filename = f"preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            file = discord.File(img_buffer, filename=preview_filename)
+            embed.set_image(url=f"attachment://{preview_filename}")
+            attachments.append(file)
         elif text_content:
             embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
             embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
@@ -674,15 +732,23 @@ async def handle_generation_request(message):
             embed.description = "**Mode:** Image transformation and enhancement"
             embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
             embed.add_field(name="Generation Type", value="🖼️ Image-only transformation", inline=True)
+            # Show first input image in embed
+            img_buffer = io.BytesIO()
+            images[0].save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            preview_filename = f"preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            file = discord.File(img_buffer, filename=preview_filename)
+            embed.set_image(url=f"attachment://{preview_filename}")
+            attachments.append(file)
             
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
         embed.set_footer(text="Click the button below to process your request")
         
-        # Create the view with the process button
-        view = ProcessRequestView(text_content, images)
+        # Create the view with the process button, passing input_outputs as existing outputs
+        view = ProcessRequestView(text_content, images, existing_outputs=input_outputs)
         
         # Update the status message with the embed and button
-        await status_msg.edit(content=None, embed=embed, view=view)
+        await status_msg.edit(content=None, embed=embed, view=view, attachments=attachments)
         
         await message.add_reaction('📋')  # Reaction to indicate request received
         logger.info(f"Request preview created for: '{text_content[:50] if text_content.strip() else 'image-only request'}...'")
