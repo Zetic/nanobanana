@@ -9,6 +9,8 @@ A Discord bot that generates stunning images using Google's Gemini AI image gene
 - **Multi-Image Stitching**: Combine multiple images and generate new content
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
+- **Robust Error Handling**: Intelligent retry logic for API rate limits
+- **User-Friendly Messages**: Clear feedback on quota limits and solutions
 
 ## 🚀 Quick Start
 
@@ -92,6 +94,9 @@ The bot can be configured in `config.py`:
 - `MAX_IMAGE_SIZE`: Maximum size per image (default: 8MB)
 - `MAX_IMAGES`: Maximum number of images to process (default: 10)
 - `GENERATED_IMAGES_DIR`: Directory to store generated images
+- `API_MAX_RETRIES`: Maximum retries for rate-limited requests (default: 3)
+- `API_BASE_DELAY`: Base delay for exponential backoff (default: 1 second)
+- `API_MAX_DELAY`: Maximum delay between retries (default: 300 seconds)
 
 ## 🔧 Development
 
@@ -134,6 +139,30 @@ The bot uses Google's Gemini 2.5 Flash Image Preview model for generation:
 @Nano Banana Combine these characters in an epic battle scene
 ```
 *(with multiple images attached)*
+
+## 🔧 Troubleshooting
+
+### Quota Limit Errors
+
+If you encounter "API quota limit exceeded" errors:
+
+1. **Wait and retry**: The bot automatically retries with delays, but you can wait 1-5 minutes before trying again
+2. **Use simpler prompts**: Shorter descriptions use fewer API tokens
+3. **Avoid rapid requests**: Space out your image generation requests
+4. **Try text-only**: Generate images without uploading attachments to save quota
+5. **Use bot commands**: Type `!help_quota` for detailed guidance
+
+### Commands
+
+- `!info` - Show bot help and features
+- `!status` - Check bot status and health
+- `!help_quota` - Get help with quota and rate limit issues
+
+### Common Issues
+
+- **"Failed to generate image"**: Usually indicates a quota limit or API error. Check bot logs for details.
+- **"Authentication Error"**: Verify your Google GenAI API key is valid and has proper permissions.
+- **"Image too large"**: Reduce image size below 8MB or use image compression.
 
 ## 🤝 Contributing
 

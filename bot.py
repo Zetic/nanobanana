@@ -9,7 +9,7 @@ from typing import List
 
 import config
 from image_utils import download_image, stitch_images
-from genai_client import ImageGenerator
+from genai_client import ImageGenerator, APIQuotaExhaustedException, APIAuthenticationException
 
 # Set up logging
 logging.basicConfig(
@@ -87,25 +87,43 @@ async def handle_generation_request(message):
         
         # Generate image
         generated_image = None
+        error_message = None
         
-        if images:
-            # Stitch images together if multiple images
-            await status_msg.edit(content="🔧 Processing images...")
-            if len(images) > 1:
-                stitched_image = stitch_images(images)
-                logger.info(f"Stitched {len(images)} images together")
+        try:
+            if images:
+                # Stitch images together if multiple images
+                await status_msg.edit(content="🔧 Processing images...")
+                if len(images) > 1:
+                    stitched_image = stitch_images(images)
+                    logger.info(f"Stitched {len(images)} images together")
+                else:
+                    stitched_image = images[0]
+                
+                # Generate image with both text and image input
+                await status_msg.edit(content="🎨 Generating image with AI...")
+                generated_image = await get_image_generator().generate_image_from_text_and_image(
+                    text_content, stitched_image
+                )
             else:
-                stitched_image = images[0]
-            
-            # Generate image with both text and image input
-            await status_msg.edit(content="🎨 Generating image with AI...")
-            generated_image = await get_image_generator().generate_image_from_text_and_image(
-                text_content, stitched_image
-            )
-        else:
-            # Generate image from text only
-            await status_msg.edit(content="🎨 Generating image from text...")
-            generated_image = await get_image_generator().generate_image_from_text(text_content)
+                # Generate image from text only
+                await status_msg.edit(content="🎨 Generating image from text...")
+                generated_image = await get_image_generator().generate_image_from_text(text_content)
+        
+        except APIQuotaExhaustedException as e:
+            # Handle quota exhaustion with helpful message
+            retry_minutes = max(1, e.retry_delay // 60)
+            error_message = f"⏰ **API Quota Limit Reached**\n\n{str(e)}\n\n💡 **What you can do:**\n• Wait about {retry_minutes} minute(s) and try again\n• Use shorter, simpler prompts to reduce API usage\n• Try text-only generation (without uploading images)\n• Consider upgrading to a paid Google GenAI plan for higher limits\n\n🔗 **More info:** https://ai.google.dev/gemini-api/docs/rate-limits"
+            logger.warning(f"API quota exhausted: {e}")
+        
+        except APIAuthenticationException as e:
+            # Handle authentication errors
+            error_message = f"🔑 **Authentication Error**\n\n{str(e)}\n\n💡 **What to check:**\n• Verify your Google GenAI API key is valid\n• Check if your API key has the necessary permissions\n• Ensure your API key hasn't expired\n• Make sure the API key has access to the Gemini model\n\n🔗 **Get API key:** https://ai.google.dev/"
+            logger.error(f"API authentication error: {e}")
+        
+        except Exception as e:
+            # Handle other errors
+            error_message = f"❌ **Unexpected Error**\n\nSomething went wrong while generating your image. Please try again in a moment.\n\n🔧 **Technical details:** {str(e)[:100]}{'...' if len(str(e)) > 100 else ''}\n\n💡 **You can try:**\n• Using a simpler prompt\n• Trying again without attached images\n• Waiting a few minutes and retrying"
+            logger.error(f"Unexpected error during image generation: {e}")
         
         if generated_image:
             # Save and send the generated image
@@ -137,6 +155,18 @@ async def handle_generation_request(message):
             await message.add_reaction('✅')
             
             logger.info(f"Successfully generated and sent image for prompt: '{text_content[:50]}...'")
+        elif error_message:
+            # Send specific error message to user
+            embed = discord.Embed(
+                title="🚫 Image Generation Failed",
+                description=error_message,
+                color=0xff6b6b
+            )
+            embed.set_footer(text="Try again later or contact support if the problem persists")
+            
+            await message.reply(embed=embed)
+            await status_msg.delete()
+            await message.add_reaction('❌')
         else:
             await status_msg.edit(content="❌ Failed to generate image. Please try again.")
             await message.add_reaction('❌')
@@ -178,6 +208,14 @@ async def info_command(ctx):
               "• Powered by Google Gemini AI",
         inline=False
     )
+    embed.add_field(
+        name="🔧 Commands",
+        value="• `!status` - Check bot status\n"
+              "• `!help_quota` - Help with quota/rate limit issues\n"
+              "• `!info` - Show this help message",
+        inline=False
+    )
+    embed.set_footer(text="Having quota issues? Try '!help_quota' for solutions!")
     await ctx.send(embed=embed)
 
 @bot.command(name='status')
@@ -190,6 +228,53 @@ async def status_command(ctx):
     embed.add_field(name="Status", value="✅ Online", inline=True)
     embed.add_field(name="Guilds", value=str(len(bot.guilds)), inline=True)
     embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+    
+    # Add helpful information about API usage
+    embed.add_field(
+        name="💡 Having issues?",
+        value="If you're getting quota errors, try:\n"
+              "• Wait a few minutes between requests\n"
+              "• Use simpler prompts\n"
+              "• Try text-only generation",
+        inline=False
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name='help_quota')
+async def help_quota_command(ctx):
+    """Show help for quota-related issues."""
+    embed = discord.Embed(
+        title="🔧 Quota & Rate Limit Help",
+        description="Having trouble with API quota limits? Here's what you need to know:",
+        color=0xffd700
+    )
+    
+    embed.add_field(
+        name="🚫 What causes quota errors?",
+        value="• Google GenAI free tier has limited requests per minute/day\n"
+              "• Image generation uses more quota than text\n"
+              "• Multiple users sharing the same API key",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="✅ Quick fixes:",
+        value="• **Wait 1-5 minutes** between requests\n"
+              "• Use **shorter, simpler prompts**\n"
+              "• Try **text-only** generation (no image uploads)\n"
+              "• Avoid multiple rapid requests",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🔗 Long-term solutions:",
+        value="• Get your own Google GenAI API key (free tier)\n"
+              "• Upgrade to paid tier for higher limits\n"
+              "• Visit: https://ai.google.dev/",
+        inline=False
+    )
+    
+    embed.set_footer(text="The bot automatically retries failed requests, so just wait a bit!")
     await ctx.send(embed=embed)
 
 def main():
