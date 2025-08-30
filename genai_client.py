@@ -46,6 +46,57 @@ class ImageGenerator:
             logger.error(f"Error generating image from text and image: {e}")
             return None
     
+    async def generate_image_from_image_only(self, input_image: Image.Image) -> Optional[Image.Image]:
+        """Generate an image from input image only with generic transformation prompt."""
+        try:
+            # Use a generic prompt that lets the AI decide how to transform the image
+            generic_prompt = "Transform and enhance this image creatively while maintaining its core subject and essence."
+            
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[generic_prompt, input_image],
+            )
+            
+            return self._extract_image_from_response(response)
+            
+        except Exception as e:
+            logger.error(f"Error generating image from image only: {e}")
+            return None
+    
+    async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Optional[Image.Image]:
+        """Generate an image from multiple input images only with generic transformation prompt."""
+        try:
+            # Use a generic prompt for multiple images
+            generic_prompt = "Creatively combine and transform these images while maintaining their core subjects and essence."
+            
+            # Create contents list starting with the prompt
+            contents = [generic_prompt]
+            
+            # Add each image to contents
+            for i, image in enumerate(input_images):
+                # Convert PIL Image to bytes for API
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format='PNG')
+                img_bytes = img_buffer.getvalue()
+                
+                # Create Part from bytes
+                image_part = types.Part.from_bytes(
+                    data=img_bytes,
+                    mime_type='image/png'
+                )
+                contents.append(image_part)
+            
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+            )
+            
+            return self._extract_image_from_response(response)
+            
+        except Exception as e:
+            logger.error(f"Error generating image from images only: {e}")
+            return None
+
     async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Optional[Image.Image]:
         """Generate an image from text prompt and multiple input images."""
         try:
