@@ -40,6 +40,14 @@ cp .env.example .env
 ```
 
 4. Run the bot:
+
+**Option A: Using the automated script (recommended)**
+```bash
+./run_bot.sh
+```
+The script will automatically check dependencies, environment setup, and start the bot with helpful error messages.
+
+**Option B: Manual start**
 ```bash
 python main.py
 ```
