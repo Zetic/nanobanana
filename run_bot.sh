@@ -34,6 +34,20 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Function to pause before exit (prevents console from closing immediately)
+pause_before_exit() {
+    local exit_code=${1:-1}
+    
+    # Only pause if running interactively (not in automated environments)
+    if [[ -t 0 ]] && [[ -t 1 ]]; then
+        echo
+        echo "Press any key to close this window..."
+        read -n 1 -s
+    fi
+    
+    exit $exit_code
+}
+
 # Function to check Python version
 check_python() {
     print_info "Checking Python installation..."
@@ -46,12 +60,12 @@ check_python() {
             PYTHON_CMD="python"
         else
             print_error "Python 3.8+ is required, but found Python 2 or older version"
-            exit 1
+            pause_before_exit 1
         fi
     else
         print_error "Python is not installed or not in PATH"
         print_info "Please install Python 3.8+ from https://python.org"
-        exit 1
+        pause_before_exit 1
     fi
     
     # Get Python version
@@ -70,7 +84,7 @@ check_pip() {
     else
         print_error "pip is not installed or not in PATH"
         print_info "Please install pip: https://pip.pypa.io/en/stable/installation/"
-        exit 1
+        pause_before_exit 1
     fi
     
     print_success "pip is available"
@@ -82,7 +96,7 @@ check_dependencies() {
     
     if [ ! -f "requirements.txt" ]; then
         print_error "requirements.txt not found!"
-        exit 1
+        pause_before_exit 1
     fi
     
     # Try to import required modules
@@ -97,7 +111,7 @@ check_dependencies() {
         else
             print_error "Dependencies are required to run the bot"
             print_info "Run: $PIP_CMD install -r requirements.txt"
-            exit 1
+            pause_before_exit 1
         fi
     else
         print_success "All dependencies are installed"
@@ -118,13 +132,13 @@ check_environment() {
             print_info "  - GOOGLE_API_KEY: Your Google GenAI API key"
             print_info ""
             print_info "After editing .env, run this script again"
-            exit 1
+            pause_before_exit 1
         else
             print_error ".env.example file not found"
             print_info "Please create a .env file with:"
             print_info "  DISCORD_TOKEN=your_discord_bot_token_here"
             print_info "  GOOGLE_API_KEY=your_google_api_key_here"
-            exit 1
+            pause_before_exit 1
         fi
     fi
     
@@ -134,7 +148,7 @@ check_environment() {
         print_info "Please edit .env file with your actual tokens:"
         print_info "  - DISCORD_TOKEN: Your Discord bot token"
         print_info "  - GOOGLE_API_KEY: Your Google GenAI API key"
-        exit 1
+        pause_before_exit 1
     fi
     
     print_success "Environment configuration looks good"
@@ -148,6 +162,16 @@ run_bot() {
     
     # Run the bot
     $PYTHON_CMD main.py
+    
+    # If we reach here, the bot has stopped normally
+    echo
+    print_info "Bot has stopped"
+    
+    # Pause before exit only if running interactively
+    if [[ -t 0 ]] && [[ -t 1 ]]; then
+        echo "Press any key to close this window..."
+        read -n 1 -s
+    fi
 }
 
 # Main script execution
@@ -159,7 +183,7 @@ main() {
     # Check if we're in the right directory
     if [ ! -f "main.py" ]; then
         print_error "main.py not found. Please run this script from the nanobanana directory"
-        exit 1
+        pause_before_exit 1
     fi
     
     # Perform all checks
@@ -177,7 +201,7 @@ main() {
 }
 
 # Handle Ctrl+C gracefully
-trap 'echo; print_info "Bot stopped by user"; exit 0' INT
+trap 'echo; print_info "Bot stopped by user"; if [[ -t 0 ]] && [[ -t 1 ]]; then echo "Press any key to close this window..."; read -n 1 -s; fi; exit 0' INT
 
 # Run main function
 main "$@"
