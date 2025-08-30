@@ -3,7 +3,7 @@ import logging
 from PIL import Image
 from google import genai
 from google.genai import types
-from typing import Optional
+from typing import Optional, List
 import config
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,37 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and image: {e}")
+            return None
+    
+    async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Optional[Image.Image]:
+        """Generate an image from text prompt and multiple input images."""
+        try:
+            # Create contents list starting with the prompt
+            contents = [prompt]
+            
+            # Add each image to contents
+            for i, image in enumerate(input_images):
+                # Convert PIL Image to bytes for API
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format='PNG')
+                img_bytes = img_buffer.getvalue()
+                
+                # Create Part from bytes
+                image_part = types.Part.from_bytes(
+                    data=img_bytes,
+                    mime_type='image/png'
+                )
+                contents.append(image_part)
+            
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+            )
+            
+            return self._extract_image_from_response(response)
+            
+        except Exception as e:
+            logger.error(f"Error generating image from text and multiple images: {e}")
             return None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
