@@ -7,6 +7,8 @@ A Discord bot that generates stunning images using Google's Gemini AI image gene
 - **Text-to-Image Generation**: Create images from descriptive text prompts
 - **Image-to-Image Transformation**: Transform uploaded images using AI
 - **Multi-Image Processing**: Process multiple images simultaneously for enhanced generation
+- **Template Styles**: Apply preset styles like "Sticker" for consistent styling
+- **Chained Modifications**: Apply styles to generated images for iterative improvements
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
 
@@ -70,6 +72,17 @@ python main.py
   ```
   @Nano Banana Combine these into a fantasy scene (with multiple images)
   ```
+
+### Template Styles
+
+The bot includes preset template styles that can be applied to enhance your images:
+
+- **🏷️ Sticker Style**: Creates images with black outlines and vector art style with transparent backgrounds
+  - For text prompts: Converts your text into a sticker design
+  - For images: Transforms images into sticker format
+  - For both: Combines image transformation with text modifications
+
+After any image is generated, you can apply additional styles using the style buttons for chained modifications.
 
 ### Available Commands
 

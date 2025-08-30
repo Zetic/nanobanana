@@ -18,35 +18,194 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class StyleOptionsView(discord.ui.View):
+    """View with style buttons for chaining modifications on generated images."""
+    
+    def __init__(self, generated_image, filename: str, timeout=300):
+        super().__init__(timeout=timeout)
+        self.generated_image = generated_image
+        self.filename = filename
+        
+    @discord.ui.button(label='🏷️ Make Sticker', style=discord.ButtonStyle.secondary)
+    async def sticker_style_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Apply sticker style to the generated image."""
+        try:
+            # Disable all buttons to prevent multiple clicks
+            for item in self.children:
+                item.disabled = True
+            
+            # Update embed to show processing
+            embed = discord.Embed(
+                title="🏷️ Applying Sticker Style - Nano Banana Bot",
+                description="Converting the generated image to sticker style...",
+                color=0x9932cc
+            )
+            embed.add_field(name="Status", value="🔄 Applying sticker template...", inline=False)
+            embed.set_footer(text="Creating sticker with black outline and vector art style")
+            
+            await interaction.response.edit_message(embed=embed, view=self)
+            
+            # Apply sticker template to the generated image
+            sticker_prompt = config.TEMPLATES['sticker']['image_only']
+            
+            # Generate new image with sticker style
+            sticker_image = await get_image_generator().generate_image_from_text_and_image(
+                sticker_prompt, self.generated_image
+            )
+            
+            if sticker_image:
+                # Save the new sticker image
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                sticker_filename = f"sticker_{timestamp}.png"
+                sticker_filepath = os.path.join(config.GENERATED_IMAGES_DIR, sticker_filename)
+                sticker_image.save(sticker_filepath)
+                
+                # Create final embed with sticker result
+                embed = discord.Embed(
+                    title="🏷️ Sticker Style Applied - Nano Banana Bot",
+                    description="**Style:** Black outline vector art sticker with transparent background",
+                    color=0x00ff00
+                )
+                embed.add_field(name="Status", value="✅ Sticker style applied!", inline=False)
+                embed.set_footer(text="Converted to sticker style")
+                
+                # Save image to buffer for Discord
+                img_buffer = io.BytesIO()
+                sticker_image.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                
+                # Create new style options view for further chaining
+                new_style_view = StyleOptionsView(sticker_image, sticker_filename)
+                
+                # Send the sticker result
+                sticker_file = discord.File(img_buffer, filename=sticker_filename)
+                embed.set_image(url=f"attachment://{sticker_filename}")
+                
+                await interaction.edit_original_response(embed=embed, view=new_style_view, attachments=[sticker_file])
+                
+                logger.info(f"Successfully applied sticker style: '{sticker_filename}'")
+            else:
+                # Update embed to show failure
+                embed = discord.Embed(
+                    title="❌ Style Application Failed - Nano Banana Bot",
+                    description="Failed to apply sticker style to the image.",
+                    color=0xff0000
+                )
+                embed.add_field(name="Status", value="❌ Please try again.", inline=False)
+                await interaction.edit_original_response(embed=embed, view=None)
+                logger.error("Failed to apply sticker style")
+                
+        except Exception as e:
+            logger.error(f"Error applying sticker style: {e}")
+            # Update embed to show error
+            embed = discord.Embed(
+                title="❌ Error - Nano Banana Bot",
+                description="An error occurred while applying the style.",
+                color=0xff0000
+            )
+            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            await interaction.edit_original_response(embed=embed, view=None)
+    
+    async def on_timeout(self):
+        """Called when the view times out."""
+        # Disable all buttons when timeout occurs
+        for item in self.children:
+            item.disabled = True
+
 class ProcessRequestView(discord.ui.View):
-    """View with button to process image generation request."""
+    """View with buttons to process image generation request and apply style templates."""
     
     def __init__(self, text_content: str, images: List, timeout=300):
         super().__init__(timeout=timeout)
         self.text_content = text_content
         self.images = images
+        self.original_text = text_content  # Keep original text for template processing
         
     @discord.ui.button(label='🎨 Process Request', style=discord.ButtonStyle.primary)
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
-        try:
-            # Disable the button to prevent multiple clicks
-            button.disabled = True
-            button.label = '⏳ Processing...'
+        await self._process_request(interaction, button)
+    
+    @discord.ui.button(label='🏷️ Sticker', style=discord.ButtonStyle.secondary)
+    async def sticker_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Apply sticker template and process."""
+        # Apply the sticker template
+        self._apply_template('sticker')
+        
+        # Update the embed to show the template was applied
+        embed = discord.Embed(
+            title="🏷️ Sticker Template Applied - Nano Banana Bot",
+            description=f"**Template:** Sticker style with black outline and vector art\n**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+            color=0x9932cc
+        )
+        embed.add_field(name="Status", value="🏷️ Template applied, processing...", inline=False)
+        if self.images:
+            embed.set_footer(text=f"Using {len(self.images)} input image(s) with sticker template")
+        else:
+            embed.set_footer(text="Generating sticker from text prompt")
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+        
+        # Process the request with the templated prompt
+        await self._process_request(interaction, button, is_template_applied=True)
+    
+    def _apply_template(self, template_name: str):
+        """Apply a template to modify the text content."""
+        if template_name not in config.TEMPLATES:
+            return
             
-            # Update embed to show processing
-            embed = discord.Embed(
-                title="🎨 Processing Request - Nano Banana Bot",
-                description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
-                color=0xffaa00
-            )
-            embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
-            if self.images:
-                embed.set_footer(text=f"Using {len(self.images)} input image(s)")
-            else:
-                embed.set_footer(text="Generating from text prompt")
+        template = config.TEMPLATES[template_name]
+        
+        if self.images and self.original_text.strip():
+            # Image + text case
+            self.text_content = template['image_and_text'].format(text=self.original_text)
+        elif self.images:
+            # Image only case
+            self.text_content = template['image_only']
+        else:
+            # Text only case - use original text or a default if empty
+            text_to_use = self.original_text.strip() or "an image"
+            self.text_content = template['text_only'].format(text=text_to_use)
+    
+    async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button, is_template_applied: bool = False):
+        """Handle the actual image processing."""
+    async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button, is_template_applied: bool = False):
+        """Handle the actual image processing."""
+        try:
+            # Disable all buttons to prevent multiple clicks
+            for item in self.children:
+                item.disabled = True
+            
+            if not is_template_applied:
+                button.label = '⏳ Processing...'
                 
-            await interaction.response.edit_message(embed=embed, view=self)
+                # Update embed to show processing
+                embed = discord.Embed(
+                    title="🎨 Processing Request - Nano Banana Bot",
+                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                    color=0xffaa00
+                )
+                embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
+                if self.images:
+                    embed.set_footer(text=f"Using {len(self.images)} input image(s)")
+                else:
+                    embed.set_footer(text="Generating from text prompt")
+                    
+                await interaction.response.edit_message(embed=embed, view=self)
+            else:
+                # For template applied case, just update the existing embed
+                embed = discord.Embed(
+                    title="🎨 Processing Sticker Request - Nano Banana Bot",
+                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                    color=0xffaa00
+                )
+                embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
+                if self.images:
+                    embed.set_footer(text=f"Using {len(self.images)} input image(s) with sticker template")
+                else:
+                    embed.set_footer(text="Generating sticker from text prompt")
+                    
+                await interaction.edit_original_response(embed=embed, view=self)
             
             # Generate the image
             generated_image = None
@@ -88,12 +247,15 @@ class ProcessRequestView(discord.ui.View):
                 generated_image.save(img_buffer, format='PNG')
                 img_buffer.seek(0)
                 
-                # Send the result as a file attachment with the embed
+                # Create style options view for chaining modifications
+                style_view = StyleOptionsView(generated_image, filename)
+                
+                # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
                 embed.set_image(url=f"attachment://{filename}")
                 
-                # Remove the view (no more buttons needed)
-                await interaction.edit_original_response(embed=embed, view=None, attachments=[file])
+                # Send with style options for chaining
+                await interaction.edit_original_response(embed=embed, view=style_view, attachments=[file])
                 
                 logger.info(f"Successfully generated and sent image for prompt: '{self.text_content[:50]}...'")
             else:
