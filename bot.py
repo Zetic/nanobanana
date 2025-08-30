@@ -5,7 +5,8 @@ import asyncio
 import io
 import os
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Any
+from dataclasses import dataclass
 
 import config
 from image_utils import download_image
@@ -17,6 +18,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+@dataclass
+class OutputItem:
+    """Represents a generated output with its metadata."""
+    image: Any  # PIL Image or similar
+    filename: str
+    prompt_used: str  # The prompt that generated this output
+    timestamp: str
 
 class PromptModal(discord.ui.Modal):
     """Modal for editing the prompt text."""
@@ -41,18 +50,97 @@ class PromptModal(discord.ui.Modal):
 class StyleOptionsView(discord.ui.View):
     """View with style buttons for chaining modifications on generated images."""
     
-    def __init__(self, generated_image, filename: str, original_text: str = "", original_images: List = None, timeout=300):
+    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=300):
         super().__init__(timeout=timeout)
-        self.generated_image = generated_image
-        self.filename = filename
+        self.outputs = outputs if outputs else []
+        self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
         self.original_images = original_images or []
+        self._update_button_states()
+    
+    def _update_button_states(self):
+        """Update button states based on number of outputs."""
+        has_multiple = len(self.outputs) > 1
+        
+        # Find navigation buttons and update their disabled state
+        for item in self.children:
+            if hasattr(item, 'emoji') and item.emoji in ['⬅️', '➡️']:
+                item.disabled = not has_multiple
+    
+    @property
+    def current_output(self) -> OutputItem:
+        """Get the currently selected output."""
+        if self.outputs and 0 <= self.current_index < len(self.outputs):
+            return self.outputs[self.current_index]
+        return None
+    
+    @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0)
+    async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Navigate to previous output."""
+        if len(self.outputs) <= 1:
+            await interaction.response.defer()
+            return
+        self.current_index = (self.current_index - 1) % len(self.outputs)
+        await self._update_display(interaction)
+    
+    @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
+    async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Navigate to next output."""
+        if len(self.outputs) <= 1:
+            await interaction.response.defer()
+            return
+        self.current_index = (self.current_index + 1) % len(self.outputs)
+        await self._update_display(interaction)
+    
+    async def _update_display(self, interaction: discord.Interaction):
+        """Update the display with the current output."""
+        if not self.outputs:
+            return
+            
+        current_output = self.outputs[self.current_index]
+        
+        # Create embed for current output
+        embed = discord.Embed(
+            title="🎨 Generated Image - Nano Banana Bot",
+            color=0x00ff00
+        )
+        
+        # Show both prompts if we have them
+        prompt_used = current_output.prompt_used
+        current_prompt = self.original_text
+        
+        if prompt_used:
+            embed.add_field(name="Prompt used:", value=f"{prompt_used[:100]}{'...' if len(prompt_used) > 100 else ''}", inline=False)
+        
+        if current_prompt and current_prompt != prompt_used:
+            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100]}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        elif not prompt_used:
+            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100] if current_prompt else 'No prompt'}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        
+        if len(self.outputs) > 1:
+            embed.add_field(name="Output", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
+        
+        embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
+        
+        # Save current image to buffer for Discord
+        img_buffer = io.BytesIO()
+        current_output.image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        
+        # Send the updated result
+        file = discord.File(img_buffer, filename=current_output.filename)
+        embed.set_image(url=f"attachment://{current_output.filename}")
+        
+        await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Process the generated image with a new prompt."""
+        """Process the current generated image with a prompt."""
+        if not self.current_output:
+            return
+            
         # Create a new ProcessRequestView using the current generated image
-        view = ProcessRequestView(self.original_text, [self.generated_image])
+        view = ProcessRequestView(self.original_text, [self.current_output.image], existing_outputs=self.outputs)
         
         # Create embed for new request
         embed = discord.Embed(
@@ -60,13 +148,31 @@ class StyleOptionsView(discord.ui.View):
             color=0x0099ff
         )
         
-        embed.description = f"**Prompt:** {self.original_text[:100] if self.original_text else 'No prompt'}{'...' if len(self.original_text) > 100 else ''}"
+        current_output = self.current_output
+        current_prompt = self.original_text
+        
+        # Show both prompts in the request
+        if current_output.prompt_used:
+            embed.add_field(name="Prompt used:", value=f"{current_output.prompt_used[:100]}{'...' if len(current_output.prompt_used) > 100 else ''}", inline=False)
+        
+        if current_prompt:
+            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100]}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        else:
+            embed.add_field(name="Current Prompt:", value="No prompt", inline=False)
+        
         embed.add_field(name="Input Images", value="📎 1 generated image", inline=True)
-        embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
+        embed.add_field(name="Generation Type", value="🎨 Text + Image transformation" if current_prompt else "🖼️ Image-only transformation", inline=True)
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
         embed.set_footer(text="Click the button below to process your request")
         
-        await interaction.response.edit_message(embed=embed, view=view, attachments=[])
+        # Preserve the current image in the request display
+        img_buffer = io.BytesIO()
+        current_output.image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        file = discord.File(img_buffer, filename=current_output.filename)
+        embed.set_image(url=f"attachment://{current_output.filename}")
+        
+        await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
     
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -80,7 +186,12 @@ class StyleOptionsView(discord.ui.View):
         if modal.new_prompt is not None:
             # Update the original text and create new ProcessRequestView
             new_text = modal.new_prompt.strip()
-            view = ProcessRequestView(new_text, [self.generated_image])
+            self.original_text = new_text  # Update the current prompt
+            
+            if not self.current_output:
+                return
+                
+            view = ProcessRequestView(new_text, [self.current_output.image], existing_outputs=self.outputs)
             
             # Create embed for new request
             embed = discord.Embed(
@@ -88,17 +199,37 @@ class StyleOptionsView(discord.ui.View):
                 color=0x0099ff
             )
             
-            embed.description = f"**Prompt:** {new_text[:100] if new_text else 'No prompt'}{'...' if len(new_text) > 100 else ''}"
+            current_output = self.current_output
+            
+            # Show both prompts in the request
+            if current_output.prompt_used:
+                embed.add_field(name="Prompt used:", value=f"{current_output.prompt_used[:100]}{'...' if len(current_output.prompt_used) > 100 else ''}", inline=False)
+            
+            if new_text:
+                embed.add_field(name="Current Prompt:", value=f"{new_text[:100]}{'...' if len(new_text) > 100 else ''}", inline=False)
+            else:
+                embed.add_field(name="Current Prompt:", value="No prompt", inline=False)
+            
             embed.add_field(name="Input Images", value="📎 1 generated image", inline=True)
             embed.add_field(name="Generation Type", value="🎨 Text + Image transformation" if new_text else "🖼️ Image-only transformation", inline=True)
             embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
             embed.set_footer(text="Click the button below to process your request")
             
-            await interaction.edit_original_response(embed=embed, view=view, attachments=[])
+            # Preserve the current image in the request display
+            img_buffer = io.BytesIO()
+            current_output.image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            file = discord.File(img_buffer, filename=current_output.filename)
+            embed.set_image(url=f"attachment://{current_output.filename}")
+            
+            await interaction.edit_original_response(embed=embed, view=view, attachments=[file])
         
     @discord.ui.button(label='🏷️ Make Sticker', style=discord.ButtonStyle.secondary)
     async def sticker_style_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Apply sticker style to the generated image."""
+        if not self.current_output:
+            return
+            
         try:
             # Disable all buttons to prevent multiple clicks
             for item in self.children:
@@ -120,7 +251,7 @@ class StyleOptionsView(discord.ui.View):
             
             # Generate new image with sticker style
             sticker_image = await get_image_generator().generate_image_from_text_and_image(
-                sticker_prompt, self.generated_image
+                sticker_prompt, self.current_output.image
             )
             
             if sticker_image:
@@ -130,12 +261,23 @@ class StyleOptionsView(discord.ui.View):
                 sticker_filepath = os.path.join(config.GENERATED_IMAGES_DIR, sticker_filename)
                 sticker_image.save(sticker_filepath)
                 
+                # Create new output item for the sticker
+                sticker_output = OutputItem(
+                    image=sticker_image,
+                    filename=sticker_filename,
+                    prompt_used=f"Sticker style: {sticker_prompt}",
+                    timestamp=timestamp
+                )
+                
+                # Add to outputs history
+                new_outputs = self.outputs + [sticker_output]
+                
                 # Create final embed with sticker result
                 embed = discord.Embed(
                     title="🏷️ Sticker Style Applied - Nano Banana Bot",
-                    description="**Style:** Black outline vector art sticker with transparent background",
                     color=0x00ff00
                 )
+                embed.add_field(name="Prompt used:", value="Sticker style: Black outline vector art with transparent background", inline=False)
                 embed.add_field(name="Status", value="✅ Sticker style applied!", inline=False)
                 embed.set_footer(text="Converted to sticker style")
                 
@@ -145,7 +287,7 @@ class StyleOptionsView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create new style options view for further chaining
-                new_style_view = StyleOptionsView(sticker_image, sticker_filename, self.original_text, self.original_images)
+                new_style_view = StyleOptionsView(new_outputs, len(new_outputs) - 1, self.original_text, self.original_images)
                 
                 # Send the sticker result
                 sticker_file = discord.File(img_buffer, filename=sticker_filename)
@@ -185,11 +327,12 @@ class StyleOptionsView(discord.ui.View):
 class ProcessRequestView(discord.ui.View):
     """View with buttons to process image generation request and apply style templates."""
     
-    def __init__(self, text_content: str, images: List, timeout=300):
+    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=300):
         super().__init__(timeout=timeout)
         self.text_content = text_content
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
+        self.existing_outputs = existing_outputs or []
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -355,24 +498,42 @@ class ProcessRequestView(discord.ui.View):
                 filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
                 generated_image.save(filepath)
                 
+                # Create new output item
+                new_output = OutputItem(
+                    image=generated_image,
+                    filename=filename,
+                    prompt_used=self.text_content.strip() or "Image transformation",
+                    timestamp=timestamp
+                )
+                
+                # Add to existing outputs to create history
+                all_outputs = self.existing_outputs + [new_output]
+                
                 # Create final embed with result
                 embed = discord.Embed(
                     title="🎨 Generated Image - Nano Banana Bot",
                     color=0x00ff00
                 )
                 
-                # Set description and footer based on what was used for generation
-                if self.text_content.strip() and self.images:
-                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
-                    embed.set_footer(text=f"Generated using {len(self.images)} input image(s) with text prompt")
-                elif self.text_content.strip():
-                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
-                    embed.set_footer(text="Generated from text prompt")
-                elif self.images:
-                    embed.description = "**Result:** Enhanced and transformed images"
-                    embed.set_footer(text=f"Generated from {len(self.images)} input image(s)")
+                # Show prompt used for this generation
+                if self.text_content.strip():
+                    embed.add_field(name="Prompt used:", value=f"{self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}", inline=False)
+                else:
+                    embed.add_field(name="Prompt used:", value="Image transformation", inline=False)
+                
+                # Show output count if we have multiple
+                if len(all_outputs) > 1:
+                    embed.add_field(name="Output", value=f"{len(all_outputs)} of {len(all_outputs)}", inline=True)
                 
                 embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
+                
+                # Set footer based on what was used for generation
+                if self.text_content.strip() and self.images:
+                    embed.set_footer(text=f"Generated using {len(self.images)} input image(s) with text prompt")
+                elif self.text_content.strip():
+                    embed.set_footer(text="Generated from text prompt")
+                elif self.images:
+                    embed.set_footer(text=f"Generated from {len(self.images)} input image(s)")
                 
                 # Save image to buffer for Discord
                 img_buffer = io.BytesIO()
@@ -380,7 +541,7 @@ class ProcessRequestView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                style_view = StyleOptionsView(generated_image, filename, self.original_text, self.images)
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.images)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
