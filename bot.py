@@ -56,41 +56,41 @@ class StyleOptionsView(discord.ui.View):
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
         self.original_images = original_images or []
-        
-        # Only add navigation buttons if we have multiple outputs
-        if len(self.outputs) > 1:
-            self._add_navigation_buttons()
+        self._update_button_states()
     
-    def _add_navigation_buttons(self):
-        """Add navigation buttons for cycling through outputs."""
-        # Add navigation buttons at the beginning
-        left_button = discord.ui.Button(
-            emoji="⬅️",
-            style=discord.ButtonStyle.secondary,
-            custom_id="nav_left"
-        )
-        left_button.callback = self._nav_left_callback
-        self.add_item(left_button)
+    def _update_button_states(self):
+        """Update button states based on number of outputs."""
+        has_multiple = len(self.outputs) > 1
         
-        right_button = discord.ui.Button(
-            emoji="➡️", 
-            style=discord.ButtonStyle.secondary,
-            custom_id="nav_right"
-        )
-        right_button.callback = self._nav_right_callback
-        self.add_item(right_button)
+        # Find navigation buttons and update their disabled state
+        for item in self.children:
+            if hasattr(item, 'emoji') and item.emoji in ['⬅️', '➡️']:
+                item.disabled = not has_multiple
     
-    async def _nav_left_callback(self, interaction: discord.Interaction):
+    @property
+    def current_output(self) -> OutputItem:
+        """Get the currently selected output."""
+        if self.outputs and 0 <= self.current_index < len(self.outputs):
+            return self.outputs[self.current_index]
+        return None
+    
+    @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0)
+    async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to previous output."""
-        if len(self.outputs) > 1:
-            self.current_index = (self.current_index - 1) % len(self.outputs)
-            await self._update_display(interaction)
+        if len(self.outputs) <= 1:
+            await interaction.response.defer()
+            return
+        self.current_index = (self.current_index - 1) % len(self.outputs)
+        await self._update_display(interaction)
     
-    async def _nav_right_callback(self, interaction: discord.Interaction):
+    @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
+    async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to next output."""
-        if len(self.outputs) > 1:
-            self.current_index = (self.current_index + 1) % len(self.outputs)
-            await self._update_display(interaction)
+        if len(self.outputs) <= 1:
+            await interaction.response.defer()
+            return
+        self.current_index = (self.current_index + 1) % len(self.outputs)
+        await self._update_display(interaction)
     
     async def _update_display(self, interaction: discord.Interaction):
         """Update the display with the current output."""
@@ -132,13 +132,6 @@ class StyleOptionsView(discord.ui.View):
         embed.set_image(url=f"attachment://{current_output.filename}")
         
         await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
-    
-    @property
-    def current_output(self) -> OutputItem:
-        """Get the currently selected output."""
-        if self.outputs and 0 <= self.current_index < len(self.outputs):
-            return self.outputs[self.current_index]
-        return None
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
