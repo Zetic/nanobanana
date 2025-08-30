@@ -1,5 +1,7 @@
 import io
 import aiohttp
+import os
+from datetime import datetime
 from PIL import Image, ImageDraw
 from typing import List, Tuple
 import logging
@@ -57,6 +59,20 @@ def stitch_images(images: List[Image.Image], max_width: int = 1024) -> Image.Ima
         y_offset += img.height
     
     return stitched_image
+
+def save_input_image(image: Image.Image, input_images_dir: str) -> str:
+    """Save a stitched input image to the input_images directory and return the filename."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"input_{timestamp}.png"
+    filepath = os.path.join(input_images_dir, filename)
+    
+    try:
+        image.save(filepath, format='PNG')
+        logger.info(f"Saved input image to: {filepath}")
+        return filename
+    except Exception as e:
+        logger.error(f"Error saving input image: {e}")
+        return None
 
 def add_text_to_image(image: Image.Image, text: str) -> Image.Image:
     """Add text overlay to an image."""

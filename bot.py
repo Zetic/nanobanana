@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List
 
 import config
-from image_utils import download_image, stitch_images
+from image_utils import download_image, stitch_images, save_input_image
 from genai_client import ImageGenerator
 
 # Set up logging
@@ -17,6 +17,106 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+class ProcessRequestView(discord.ui.View):
+    """View with button to process image generation request."""
+    
+    def __init__(self, text_content: str, stitched_image, images: List, timeout=300):
+        super().__init__(timeout=timeout)
+        self.text_content = text_content
+        self.stitched_image = stitched_image
+        self.images = images
+        
+    @discord.ui.button(label='🎨 Process Request', style=discord.ButtonStyle.primary)
+    async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle the process button click."""
+        try:
+            # Disable the button to prevent multiple clicks
+            button.disabled = True
+            button.label = '⏳ Processing...'
+            
+            # Update embed to show processing
+            embed = discord.Embed(
+                title="🎨 Processing Request - Nano Banana Bot",
+                description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                color=0xffaa00
+            )
+            embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
+            if self.images:
+                embed.set_footer(text=f"Using {len(self.images)} input image(s)")
+            else:
+                embed.set_footer(text="Generating from text prompt")
+                
+            await interaction.response.edit_message(embed=embed, view=self)
+            
+            # Generate the image
+            generated_image = None
+            if self.stitched_image:
+                generated_image = await get_image_generator().generate_image_from_text_and_image(
+                    self.text_content, self.stitched_image
+                )
+            else:
+                generated_image = await get_image_generator().generate_image_from_text(self.text_content)
+            
+            if generated_image:
+                # Save the generated image
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"generated_{timestamp}.png"
+                filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+                generated_image.save(filepath)
+                
+                # Create final embed with result
+                embed = discord.Embed(
+                    title="🎨 Generated Image - Nano Banana Bot",
+                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                    color=0x00ff00
+                )
+                embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
+                if self.images:
+                    embed.set_footer(text=f"Generated using {len(self.images)} input image(s)")
+                else:
+                    embed.set_footer(text="Generated from text prompt")
+                
+                # Save image to buffer for Discord
+                img_buffer = io.BytesIO()
+                generated_image.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                
+                # Send the result as a file attachment with the embed
+                file = discord.File(img_buffer, filename=filename)
+                embed.set_image(url=f"attachment://{filename}")
+                
+                # Remove the view (no more buttons needed)
+                await interaction.edit_original_response(embed=embed, view=None, attachments=[file])
+                
+                logger.info(f"Successfully generated and sent image for prompt: '{self.text_content[:50]}...'")
+            else:
+                # Update embed to show failure
+                embed = discord.Embed(
+                    title="❌ Generation Failed - Nano Banana Bot",
+                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                    color=0xff0000
+                )
+                embed.add_field(name="Status", value="❌ Failed to generate image. Please try again.", inline=False)
+                await interaction.edit_original_response(embed=embed, view=None)
+                logger.error("Failed to generate image")
+                
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            # Update embed to show error
+            embed = discord.Embed(
+                title="❌ Error - Nano Banana Bot",
+                description="An error occurred while processing your request.",
+                color=0xff0000
+            )
+            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            await interaction.edit_original_response(embed=embed, view=None)
+    
+    async def on_timeout(self):
+        """Called when the view times out."""
+        # Disable all buttons when timeout occurs
+        for item in self.children:
+            item.disabled = True
 
 # Bot setup
 intents = discord.Intents.default()
@@ -58,7 +158,7 @@ async def handle_generation_request(message):
     try:
         # Send initial response
         await message.add_reaction('🎨')
-        status_msg = await message.reply("🎨 Processing your image generation request...")
+        status_msg = await message.reply("📥 Preparing your request...")
         
         # Extract text (remove bot mention)
         text_content = message.content
@@ -85,11 +185,10 @@ async def handle_generation_request(message):
                     else:
                         logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
         
-        # Generate image
-        generated_image = None
-        
+        # Process and stitch images if any
+        stitched_image = None
+        input_filename = None
         if images:
-            # Stitch images together if multiple images
             await status_msg.edit(content="🔧 Processing images...")
             if len(images) > 1:
                 stitched_image = stitch_images(images)
@@ -97,50 +196,48 @@ async def handle_generation_request(message):
             else:
                 stitched_image = images[0]
             
-            # Generate image with both text and image input
-            await status_msg.edit(content="🎨 Generating image with AI...")
-            generated_image = await get_image_generator().generate_image_from_text_and_image(
-                text_content, stitched_image
-            )
-        else:
-            # Generate image from text only
-            await status_msg.edit(content="🎨 Generating image from text...")
-            generated_image = await get_image_generator().generate_image_from_text(text_content)
+            # Save the stitched image to input_images directory
+            if stitched_image:
+                input_filename = save_input_image(stitched_image, config.INPUT_IMAGES_DIR)
         
-        if generated_image:
-            # Save and send the generated image
-            await status_msg.edit(content="📤 Sending generated image...")
-            
-            # Save image to buffer
-            img_buffer = io.BytesIO()
-            generated_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-            
-            # Also save to disk for reference
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"generated_{timestamp}.png"
-            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-            generated_image.save(filepath)
-            
-            # Send the image
-            file = discord.File(img_buffer, filename=filename)
-            embed = discord.Embed(
-                title="🎨 Generated Image - Nano Banana Bot",
-                description=f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}",
-                color=0x00ff00
-            )
-            embed.set_image(url=f"attachment://{filename}")
-            embed.set_footer(text=f"Generated using {len(images)} input image(s)" if images else "Generated from text prompt")
-            
-            await message.reply(file=file, embed=embed)
-            await status_msg.delete()
-            await message.add_reaction('✅')
-            
-            logger.info(f"Successfully generated and sent image for prompt: '{text_content[:50]}...'")
+        # Create preview embed with the request details
+        embed = discord.Embed(
+            title="🎨 Image Generation Request - Nano Banana Bot",
+            description=f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}",
+            color=0x0099ff
+        )
+        
+        if images:
+            embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) processed", inline=True)
+            if input_filename:
+                embed.add_field(name="Archived As", value=f"📁 {input_filename}", inline=True)
         else:
-            await status_msg.edit(content="❌ Failed to generate image. Please try again.")
-            await message.add_reaction('❌')
-            logger.error("Failed to generate image")
+            embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
+            
+        embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
+        embed.set_footer(text="Click the button below to process your request")
+        
+        # If we have a stitched image, show it in the embed
+        if stitched_image and input_filename:
+            # Save stitched image to buffer for display
+            img_buffer = io.BytesIO()
+            stitched_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            file = discord.File(img_buffer, filename=input_filename)
+            embed.set_thumbnail(url=f"attachment://{input_filename}")
+            
+            # Create the view with the process button
+            view = ProcessRequestView(text_content, stitched_image, images)
+            
+            # Update the status message with the embed and button
+            await status_msg.edit(content=None, embed=embed, view=view, attachments=[file])
+        else:
+            # No images, just show the text request
+            view = ProcessRequestView(text_content, None, [])
+            await status_msg.edit(content=None, embed=embed, view=view)
+        
+        await message.add_reaction('📋')  # Reaction to indicate request received
+        logger.info(f"Request preview created for prompt: '{text_content[:50]}...'")
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
