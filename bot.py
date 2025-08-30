@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List
 
 import config
-from image_utils import download_image, stitch_images, save_input_image
+from image_utils import download_image
 from genai_client import ImageGenerator
 
 # Set up logging
@@ -21,10 +21,9 @@ logger = logging.getLogger(__name__)
 class ProcessRequestView(discord.ui.View):
     """View with button to process image generation request."""
     
-    def __init__(self, text_content: str, stitched_image, images: List, timeout=300):
+    def __init__(self, text_content: str, images: List, timeout=300):
         super().__init__(timeout=timeout)
         self.text_content = text_content
-        self.stitched_image = stitched_image
         self.images = images
         
     @discord.ui.button(label='🎨 Process Request', style=discord.ButtonStyle.primary)
@@ -51,10 +50,17 @@ class ProcessRequestView(discord.ui.View):
             
             # Generate the image
             generated_image = None
-            if self.stitched_image:
-                generated_image = await get_image_generator().generate_image_from_text_and_image(
-                    self.text_content, self.stitched_image
-                )
+            if self.images:
+                if len(self.images) == 1:
+                    # Single image case - use existing method
+                    generated_image = await get_image_generator().generate_image_from_text_and_image(
+                        self.text_content, self.images[0]
+                    )
+                else:
+                    # Multiple images case - use new method
+                    generated_image = await get_image_generator().generate_image_from_text_and_images(
+                        self.text_content, self.images
+                    )
             else:
                 generated_image = await get_image_generator().generate_image_from_text(self.text_content)
             
@@ -185,21 +191,6 @@ async def handle_generation_request(message):
                     else:
                         logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
         
-        # Process and stitch images if any
-        stitched_image = None
-        input_filename = None
-        if images:
-            await status_msg.edit(content="🔧 Processing images...")
-            if len(images) > 1:
-                stitched_image = stitch_images(images)
-                logger.info(f"Stitched {len(images)} images together")
-            else:
-                stitched_image = images[0]
-            
-            # Save the stitched image to input_images directory
-            if stitched_image:
-                input_filename = save_input_image(stitched_image, config.INPUT_IMAGES_DIR)
-        
         # Create preview embed with the request details
         embed = discord.Embed(
             title="🎨 Image Generation Request - Nano Banana Bot",
@@ -208,33 +199,18 @@ async def handle_generation_request(message):
         )
         
         if images:
-            embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) processed", inline=True)
-            if input_filename:
-                embed.add_field(name="Archived As", value=f"📁 {input_filename}", inline=True)
+            embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
         else:
             embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
             
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
         embed.set_footer(text="Click the button below to process your request")
         
-        # If we have a stitched image, show it in the embed
-        if stitched_image and input_filename:
-            # Save stitched image to buffer for display
-            img_buffer = io.BytesIO()
-            stitched_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-            file = discord.File(img_buffer, filename=input_filename)
-            embed.set_thumbnail(url=f"attachment://{input_filename}")
-            
-            # Create the view with the process button
-            view = ProcessRequestView(text_content, stitched_image, images)
-            
-            # Update the status message with the embed and button
-            await status_msg.edit(content=None, embed=embed, view=view, attachments=[file])
-        else:
-            # No images, just show the text request
-            view = ProcessRequestView(text_content, None, [])
-            await status_msg.edit(content=None, embed=embed, view=view)
+        # Create the view with the process button
+        view = ProcessRequestView(text_content, images)
+        
+        # Update the status message with the embed and button
+        await status_msg.edit(content=None, embed=embed, view=view)
         
         await message.add_reaction('📋')  # Reaction to indicate request received
         logger.info(f"Request preview created for prompt: '{text_content[:50]}...'")
@@ -271,7 +247,7 @@ async def info_command(ctx):
         name="📝 Features",
         value="• Text-to-image generation\n"
               "• Image-to-image transformation\n"
-              "• Multiple image stitching\n"
+              "• Multiple image processing\n"
               "• Powered by Google Gemini AI",
         inline=False
     )

@@ -1,12 +1,12 @@
 # 🍌 Nano Banana Discord Bot
 
-A Discord bot that generates stunning images using Google's Gemini AI image generation capabilities. The bot can create images from text prompts, transform existing images, and even stitch multiple images together for enhanced AI generation.
+A Discord bot that generates stunning images using Google's Gemini AI image generation capabilities. The bot can create images from text prompts, transform existing images, and process multiple images simultaneously for enhanced AI generation.
 
 ## ✨ Features
 
 - **Text-to-Image Generation**: Create images from descriptive text prompts
 - **Image-to-Image Transformation**: Transform uploaded images using AI
-- **Multi-Image Stitching**: Combine multiple images and generate new content
+- **Multi-Image Processing**: Process multiple images simultaneously for enhanced generation
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
 
@@ -66,7 +66,7 @@ python main.py
   @Nano Banana Make this cat look cyberpunk (with image attached)
   ```
 
-- **Multiple images** will be stitched together automatically:
+- **Multiple images** will be processed simultaneously:
   ```
   @Nano Banana Combine these into a fantasy scene (with multiple images)
   ```
