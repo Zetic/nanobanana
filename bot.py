@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 from dataclasses import dataclass
 
 import config
-from image_utils import download_image
+from image_utils import download_image, create_stitched_image
 from genai_client import ImageGenerator
 
 # Set up logging
@@ -450,9 +450,13 @@ class ProcessRequestView(discord.ui.View):
                 # Add input image to embed if available
                 attachments = []
                 if self.images:
-                    # Show the first input image in the embed during processing
+                    # Use stitched image for display when multiple images, single image otherwise
+                    if len(self.images) > 1:
+                        display_image = create_stitched_image(self.images)
+                    else:
+                        display_image = self.images[0]
                     img_buffer = io.BytesIO()
-                    self.images[0].save(img_buffer, format='PNG')
+                    display_image.save(img_buffer, format='PNG')
                     img_buffer.seek(0)
                     input_filename = f"processing_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     file = discord.File(img_buffer, filename=input_filename)
@@ -472,9 +476,13 @@ class ProcessRequestView(discord.ui.View):
                 embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
                 if self.images:
                     embed.set_footer(text=f"Using {len(self.images)} input image(s) with sticker template")
-                    # Show the first input image in the embed during sticker processing
+                    # Use stitched image for display when multiple images, single image otherwise
+                    if len(self.images) > 1:
+                        display_image = create_stitched_image(self.images)
+                    else:
+                        display_image = self.images[0]
                     img_buffer = io.BytesIO()
-                    self.images[0].save(img_buffer, format='PNG')
+                    display_image.save(img_buffer, format='PNG')
                     img_buffer.seek(0)
                     input_filename = f"sticker_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     file = discord.File(img_buffer, filename=input_filename)
@@ -717,9 +725,14 @@ async def handle_generation_request(message):
             embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
             embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
             embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
-            # Show first input image in embed
+            # Use stitched image for display when multiple images, single image otherwise
+            if len(images) > 1:
+                display_image = create_stitched_image(images)
+                embed.add_field(name="Preview", value="📋 Combined preview (for display only)", inline=True)
+            else:
+                display_image = images[0]
             img_buffer = io.BytesIO()
-            images[0].save(img_buffer, format='PNG')
+            display_image.save(img_buffer, format='PNG')
             img_buffer.seek(0)
             preview_filename = f"preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             file = discord.File(img_buffer, filename=preview_filename)
@@ -732,9 +745,14 @@ async def handle_generation_request(message):
             embed.description = "**Mode:** Image transformation and enhancement"
             embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
             embed.add_field(name="Generation Type", value="🖼️ Image-only transformation", inline=True)
-            # Show first input image in embed
+            # Use stitched image for display when multiple images, single image otherwise
+            if len(images) > 1:
+                display_image = create_stitched_image(images)
+                embed.add_field(name="Preview", value="📋 Combined preview (for display only)", inline=True)
+            else:
+                display_image = images[0]
             img_buffer = io.BytesIO()
-            images[0].save(img_buffer, format='PNG')
+            display_image.save(img_buffer, format='PNG')
             img_buffer.seek(0)
             preview_filename = f"preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             file = discord.File(img_buffer, filename=preview_filename)
