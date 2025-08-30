@@ -29,8 +29,9 @@ class ImageGenerator:
         
         self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
         self.model = "gemini-2.5-flash-image-preview"
-        self.max_retries = 3
-        self.base_delay = 1  # Base delay in seconds for exponential backoff
+        self.max_retries = getattr(config, 'API_MAX_RETRIES', 3)
+        self.base_delay = getattr(config, 'API_BASE_DELAY', 1)
+        self.max_delay = getattr(config, 'API_MAX_DELAY', 300)
     
     def _parse_api_error(self, error) -> Tuple[str, bool, int]:
         """Parse API error and return (message, is_quota_error, retry_delay)."""
@@ -78,7 +79,7 @@ class ImageGenerator:
                     raise
                 
                 # Calculate delay: use API suggested delay or exponential backoff
-                delay = min(e.retry_delay if e.retry_delay > 0 else self.base_delay * (2 ** attempt), 300)  # Cap at 5 minutes
+                delay = min(e.retry_delay if e.retry_delay > 0 else self.base_delay * (2 ** attempt), self.max_delay)
                 
                 logger.warning(f"Rate limited, retrying in {delay} seconds (attempt {attempt + 1}/{self.max_retries})")
                 await asyncio.sleep(delay)
