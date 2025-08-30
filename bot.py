@@ -9,7 +9,7 @@ from typing import List
 
 import config
 from image_utils import download_image, stitch_images
-from genai_client import ImageGenerator
+from genai_client import ImageGenerator, APIQuotaExhaustedException, APIAuthenticationException
 
 # Set up logging
 logging.basicConfig(
@@ -87,25 +87,42 @@ async def handle_generation_request(message):
         
         # Generate image
         generated_image = None
+        error_message = None
         
-        if images:
-            # Stitch images together if multiple images
-            await status_msg.edit(content="🔧 Processing images...")
-            if len(images) > 1:
-                stitched_image = stitch_images(images)
-                logger.info(f"Stitched {len(images)} images together")
+        try:
+            if images:
+                # Stitch images together if multiple images
+                await status_msg.edit(content="🔧 Processing images...")
+                if len(images) > 1:
+                    stitched_image = stitch_images(images)
+                    logger.info(f"Stitched {len(images)} images together")
+                else:
+                    stitched_image = images[0]
+                
+                # Generate image with both text and image input
+                await status_msg.edit(content="🎨 Generating image with AI...")
+                generated_image = await get_image_generator().generate_image_from_text_and_image(
+                    text_content, stitched_image
+                )
             else:
-                stitched_image = images[0]
-            
-            # Generate image with both text and image input
-            await status_msg.edit(content="🎨 Generating image with AI...")
-            generated_image = await get_image_generator().generate_image_from_text_and_image(
-                text_content, stitched_image
-            )
-        else:
-            # Generate image from text only
-            await status_msg.edit(content="🎨 Generating image from text...")
-            generated_image = await get_image_generator().generate_image_from_text(text_content)
+                # Generate image from text only
+                await status_msg.edit(content="🎨 Generating image from text...")
+                generated_image = await get_image_generator().generate_image_from_text(text_content)
+        
+        except APIQuotaExhaustedException as e:
+            # Handle quota exhaustion with helpful message
+            error_message = f"⏰ **API Quota Limit Reached**\n\n{str(e)}\n\n💡 **What you can do:**\n• Wait a few minutes and try again\n• Use shorter prompts to reduce API usage\n• Consider upgrading to a paid Google GenAI plan for higher limits"
+            logger.warning(f"API quota exhausted: {e}")
+        
+        except APIAuthenticationException as e:
+            # Handle authentication errors
+            error_message = f"🔑 **Authentication Error**\n\n{str(e)}\n\n💡 **What to check:**\n• Verify your Google GenAI API key is valid\n• Check if your API key has the necessary permissions\n• Ensure your API key hasn't expired"
+            logger.error(f"API authentication error: {e}")
+        
+        except Exception as e:
+            # Handle other errors
+            error_message = f"❌ **Unexpected Error**\n\nSomething went wrong while generating your image. Please try again in a moment.\n\n🔧 **Technical details:** {str(e)[:100]}{'...' if len(str(e)) > 100 else ''}"
+            logger.error(f"Unexpected error during image generation: {e}")
         
         if generated_image:
             # Save and send the generated image
@@ -137,6 +154,18 @@ async def handle_generation_request(message):
             await message.add_reaction('✅')
             
             logger.info(f"Successfully generated and sent image for prompt: '{text_content[:50]}...'")
+        elif error_message:
+            # Send specific error message to user
+            embed = discord.Embed(
+                title="🚫 Image Generation Failed",
+                description=error_message,
+                color=0xff6b6b
+            )
+            embed.set_footer(text="Try again later or contact support if the problem persists")
+            
+            await message.reply(embed=embed)
+            await status_msg.delete()
+            await message.add_reaction('❌')
         else:
             await status_msg.edit(content="❌ Failed to generate image. Please try again.")
             await message.add_reaction('❌')
