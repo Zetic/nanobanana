@@ -135,7 +135,7 @@ class ProcessRequestView(discord.ui.View):
         # Update the embed to show the template was applied
         embed = discord.Embed(
             title="🏷️ Sticker Template Applied - Nano Banana Bot",
-            description=f"**Template:** Sticker style with black outline and vector art\n**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+            description=f"**Template:** Sticker style with black outline and vector art\n**Prompt:** {self.text_content[:100] if self.text_content else 'Applied to images'}{'...' if len(self.text_content) > 100 else ''}",
             color=0x9932cc
         )
         embed.add_field(name="Status", value="🏷️ Template applied, processing...", inline=False)
@@ -182,21 +182,28 @@ class ProcessRequestView(discord.ui.View):
                 # Update embed to show processing
                 embed = discord.Embed(
                     title="🎨 Processing Request - Nano Banana Bot",
-                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
                     color=0xffaa00
                 )
-                embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
-                if self.images:
-                    embed.set_footer(text=f"Using {len(self.images)} input image(s)")
-                else:
+                
+                # Set description based on what we're processing
+                if self.text_content.strip() and self.images:
+                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+                    embed.set_footer(text=f"Using {len(self.images)} input image(s) with text prompt")
+                elif self.text_content.strip():
+                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
                     embed.set_footer(text="Generating from text prompt")
+                elif self.images:
+                    embed.description = "**Mode:** Transforming and enhancing images"
+                    embed.set_footer(text=f"Processing {len(self.images)} input image(s)")
+                
+                embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
                     
                 await interaction.response.edit_message(embed=embed, view=self)
             else:
                 # For template applied case, just update the existing embed
                 embed = discord.Embed(
                     title="🎨 Processing Sticker Request - Nano Banana Bot",
-                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                    description=f"**Prompt:** {self.text_content[:100] if self.text_content else 'Sticker template applied'}{'...' if len(self.text_content) > 100 else ''}",
                     color=0xffaa00
                 )
                 embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
@@ -207,21 +214,31 @@ class ProcessRequestView(discord.ui.View):
                     
                 await interaction.edit_original_response(embed=embed, view=self)
             
-            # Generate the image
+            # Generate the image based on available inputs
             generated_image = None
-            if self.images:
+            if self.images and self.text_content.strip():
+                # Text + Image(s) case
                 if len(self.images) == 1:
-                    # Single image case - use existing method
                     generated_image = await get_image_generator().generate_image_from_text_and_image(
                         self.text_content, self.images[0]
                     )
                 else:
-                    # Multiple images case - use new method
                     generated_image = await get_image_generator().generate_image_from_text_and_images(
                         self.text_content, self.images
                     )
-            else:
+            elif self.images:
+                # Image(s) only case - no text provided
+                if len(self.images) == 1:
+                    generated_image = await get_image_generator().generate_image_from_image_only(self.images[0])
+                else:
+                    generated_image = await get_image_generator().generate_image_from_images_only(self.images)
+            elif self.text_content.strip():
+                # Text only case
                 generated_image = await get_image_generator().generate_image_from_text(self.text_content)
+            else:
+                # This shouldn't happen due to validation, but handle gracefully
+                logger.error("No text content or images provided for generation")
+                return
             
             if generated_image:
                 # Save the generated image
@@ -233,14 +250,21 @@ class ProcessRequestView(discord.ui.View):
                 # Create final embed with result
                 embed = discord.Embed(
                     title="🎨 Generated Image - Nano Banana Bot",
-                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
                     color=0x00ff00
                 )
-                embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
-                if self.images:
-                    embed.set_footer(text=f"Generated using {len(self.images)} input image(s)")
-                else:
+                
+                # Set description and footer based on what was used for generation
+                if self.text_content.strip() and self.images:
+                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+                    embed.set_footer(text=f"Generated using {len(self.images)} input image(s) with text prompt")
+                elif self.text_content.strip():
+                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
                     embed.set_footer(text="Generated from text prompt")
+                elif self.images:
+                    embed.description = "**Result:** Enhanced and transformed images"
+                    embed.set_footer(text=f"Generated from {len(self.images)} input image(s)")
+                
+                embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
                 
                 # Save image to buffer for Discord
                 img_buffer = io.BytesIO()
@@ -257,14 +281,22 @@ class ProcessRequestView(discord.ui.View):
                 # Send with style options for chaining
                 await interaction.edit_original_response(embed=embed, view=style_view, attachments=[file])
                 
-                logger.info(f"Successfully generated and sent image for prompt: '{self.text_content[:50]}...'")
+                logger.info(f"Successfully generated and sent image for request: '{self.text_content[:50] if self.text_content.strip() else 'image-only transformation'}...'")
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
                     title="❌ Generation Failed - Nano Banana Bot",
-                    description=f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
                     color=0xff0000
                 )
+                
+                # Set description based on what failed
+                if self.text_content.strip() and self.images:
+                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+                elif self.text_content.strip():
+                    embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+                elif self.images:
+                    embed.description = f"**Failed:** Image transformation with {len(self.images)} input image(s)"
+                
                 embed.add_field(name="Status", value="❌ Failed to generate image. Please try again.", inline=False)
                 await interaction.edit_original_response(embed=embed, view=None)
                 logger.error("Failed to generate image")
@@ -333,10 +365,6 @@ async def handle_generation_request(message):
         for mention in message.mentions:
             text_content = text_content.replace(f'<@{mention.id}>', '').strip()
         
-        # If no text provided, use a default prompt
-        if not text_content:
-            text_content = "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
-        
         logger.info(f"Processing request with text: '{text_content}'")
         
         # Extract images from attachments
@@ -353,17 +381,30 @@ async def handle_generation_request(message):
                     else:
                         logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
         
+        # Validate that we have either text or images (or both)
+        if not text_content and not images:
+            await status_msg.edit(content="❌ Please provide either text, images, or both for generation.")
+            await message.add_reaction('❌')
+            return
+        
         # Create preview embed with the request details
         embed = discord.Embed(
             title="🎨 Image Generation Request - Nano Banana Bot",
-            description=f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}",
             color=0x0099ff
         )
         
-        if images:
+        # Set description based on what inputs we have
+        if text_content and images:
+            embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
             embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
-        else:
+            embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
+        elif text_content:
+            embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
             embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
+        elif images:
+            embed.description = "**Mode:** Image transformation and enhancement"
+            embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
+            embed.add_field(name="Generation Type", value="🖼️ Image-only transformation", inline=True)
             
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
         embed.set_footer(text="Click the button below to process your request")
@@ -375,7 +416,7 @@ async def handle_generation_request(message):
         await status_msg.edit(content=None, embed=embed, view=view)
         
         await message.add_reaction('📋')  # Reaction to indicate request received
-        logger.info(f"Request preview created for prompt: '{text_content[:50]}...'")
+        logger.info(f"Request preview created for: '{text_content[:50] if text_content.strip() else 'image-only request'}...'")
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
