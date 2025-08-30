@@ -18,13 +18,83 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class PromptModal(discord.ui.Modal):
+    """Modal for editing the prompt text."""
+    
+    def __init__(self, current_prompt: str = "", title: str = "Edit Prompt"):
+        super().__init__(title=title)
+        self.prompt_input = discord.ui.TextInput(
+            label="Prompt",
+            placeholder="Enter your prompt here...",
+            default=current_prompt,
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+            required=False
+        )
+        self.add_item(self.prompt_input)
+        self.new_prompt = None
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        self.new_prompt = self.prompt_input.value
+        await interaction.response.defer()
+
 class StyleOptionsView(discord.ui.View):
     """View with style buttons for chaining modifications on generated images."""
     
-    def __init__(self, generated_image, filename: str, timeout=300):
+    def __init__(self, generated_image, filename: str, original_text: str = "", original_images: List = None, timeout=300):
         super().__init__(timeout=timeout)
         self.generated_image = generated_image
         self.filename = filename
+        self.original_text = original_text
+        self.original_images = original_images or []
+        
+    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
+    async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Process the generated image with a new prompt."""
+        # Create a new ProcessRequestView using the current generated image
+        view = ProcessRequestView(self.original_text, [self.generated_image])
+        
+        # Create embed for new request
+        embed = discord.Embed(
+            title="🎨 Image Generation Request - Nano Banana Bot",
+            color=0x0099ff
+        )
+        
+        embed.description = f"**Prompt:** {self.original_text[:100] if self.original_text else 'No prompt'}{'...' if len(self.original_text) > 100 else ''}"
+        embed.add_field(name="Input Images", value="📎 1 generated image", inline=True)
+        embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
+        embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
+        embed.set_footer(text="Click the button below to process your request")
+        
+        await interaction.response.edit_message(embed=embed, view=view, attachments=[])
+    
+    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
+    async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Show modal to edit prompt for the generated image."""
+        modal = PromptModal(self.original_text, "Edit Prompt for Generated Image")
+        await interaction.response.send_modal(modal)
+        
+        # Wait for modal submission
+        await modal.wait()
+        
+        if modal.new_prompt is not None:
+            # Update the original text and create new ProcessRequestView
+            new_text = modal.new_prompt.strip()
+            view = ProcessRequestView(new_text, [self.generated_image])
+            
+            # Create embed for new request
+            embed = discord.Embed(
+                title="🎨 Image Generation Request - Nano Banana Bot",
+                color=0x0099ff
+            )
+            
+            embed.description = f"**Prompt:** {new_text[:100] if new_text else 'No prompt'}{'...' if len(new_text) > 100 else ''}"
+            embed.add_field(name="Input Images", value="📎 1 generated image", inline=True)
+            embed.add_field(name="Generation Type", value="🎨 Text + Image transformation" if new_text else "🖼️ Image-only transformation", inline=True)
+            embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
+            embed.set_footer(text="Click the button below to process your request")
+            
+            await interaction.edit_original_response(embed=embed, view=view, attachments=[])
         
     @discord.ui.button(label='🏷️ Make Sticker', style=discord.ButtonStyle.secondary)
     async def sticker_style_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -75,7 +145,7 @@ class StyleOptionsView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create new style options view for further chaining
-                new_style_view = StyleOptionsView(sticker_image, sticker_filename)
+                new_style_view = StyleOptionsView(sticker_image, sticker_filename, self.original_text, self.original_images)
                 
                 # Send the sticker result
                 sticker_file = discord.File(img_buffer, filename=sticker_filename)
@@ -121,10 +191,48 @@ class ProcessRequestView(discord.ui.View):
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
         
-    @discord.ui.button(label='🎨 Process Request', style=discord.ButtonStyle.primary)
+    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
         await self._process_request(interaction, button)
+    
+    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
+    async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Show modal to edit the prompt."""
+        modal = PromptModal(self.text_content, "Edit Prompt")
+        await interaction.response.send_modal(modal)
+        
+        # Wait for modal submission
+        await modal.wait()
+        
+        if modal.new_prompt is not None:
+            # Update the text content
+            self.text_content = modal.new_prompt.strip()
+            self.original_text = self.text_content  # Update original text as well
+            
+            # Update the embed to show the new prompt
+            embed = discord.Embed(
+                title="🎨 Image Generation Request - Nano Banana Bot",
+                color=0x0099ff
+            )
+            
+            # Set description based on what inputs we have
+            if self.text_content and self.images:
+                embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+                embed.add_field(name="Input Images", value=f"📎 {len(self.images)} image(s) attached", inline=True)
+                embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
+            elif self.text_content:
+                embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+                embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
+            elif self.images:
+                embed.description = "**Mode:** Image transformation and enhancement"
+                embed.add_field(name="Input Images", value=f"📎 {len(self.images)} image(s) attached", inline=True)
+                embed.add_field(name="Generation Type", value="🖼️ Image-only transformation", inline=True)
+                
+            embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
+            embed.set_footer(text="Click the button below to process your request")
+            
+            await interaction.edit_original_response(embed=embed, view=self, attachments=[])
     
     @discord.ui.button(label='🏷️ Sticker', style=discord.ButtonStyle.secondary)
     async def sticker_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -272,7 +380,7 @@ class ProcessRequestView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                style_view = StyleOptionsView(generated_image, filename)
+                style_view = StyleOptionsView(generated_image, filename, self.original_text, self.images)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
