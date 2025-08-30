@@ -15,6 +15,8 @@ COMMAND_PREFIX = '!'
 MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8MB max per image
 MAX_IMAGES = 10  # Maximum number of images to process
 GENERATED_IMAGES_DIR = 'generated_images'
+INPUT_IMAGES_DIR = 'input_images'
 
-# Ensure generated images directory exists
+# Ensure directories exist
 os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)
+os.makedirs(INPUT_IMAGES_DIR, exist_ok=True)

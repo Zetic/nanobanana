@@ -34,6 +34,7 @@ env/
 
 # Generated images
 generated_images/
+input_images/
 *.png
 *.jpg
 *.jpeg
