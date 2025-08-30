@@ -163,8 +163,9 @@ class ProcessRequestView(discord.ui.View):
             # Image only case
             self.text_content = template['image_only']
         else:
-            # Text only case
-            self.text_content = template['text_only'].format(text=self.original_text)
+            # Text only case - use original text or a default if empty
+            text_to_use = self.original_text.strip() or "an image"
+            self.text_content = template['text_only'].format(text=text_to_use)
     
     async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button, is_template_applied: bool = False):
         """Handle the actual image processing."""
