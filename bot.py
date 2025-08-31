@@ -139,8 +139,14 @@ class StyleOptionsView(discord.ui.View):
         if not self.current_output:
             return
             
-        # Create a new ProcessRequestView using the current generated image
-        view = ProcessRequestView(self.original_text, [self.current_output.image], existing_outputs=self.outputs)
+        # Create a new ProcessRequestView - use original images if current output is stitched input
+        images_to_use = [self.current_output.image]
+        if (self.current_output.filename.startswith("input_stitched_") and 
+            self.original_images and len(self.original_images) > 1):
+            # If processing a stitched input, use the original input images
+            images_to_use = self.original_images
+        
+        view = ProcessRequestView(self.original_text, images_to_use, existing_outputs=self.outputs)
         
         # Create embed for new request
         embed = discord.Embed(
@@ -160,17 +166,29 @@ class StyleOptionsView(discord.ui.View):
         else:
             embed.add_field(name="Current Prompt:", value="No prompt", inline=False)
         
-        embed.add_field(name="Input Images", value="📎 1 generated image", inline=True)
+        embed.add_field(name="Input Images", value=f"📎 {len(images_to_use)} {'original' if len(images_to_use) > 1 and self.current_output.filename.startswith('input_stitched_') else 'generated'} image(s)", inline=True)
         embed.add_field(name="Generation Type", value="🎨 Text + Image transformation" if current_prompt else "🖼️ Image-only transformation", inline=True)
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
         embed.set_footer(text="Click the button below to process your request")
         
-        # Preserve the current image in the request display
-        img_buffer = io.BytesIO()
-        current_output.image.save(img_buffer, format='PNG')
-        img_buffer.seek(0)
-        file = discord.File(img_buffer, filename=current_output.filename)
-        embed.set_image(url=f"attachment://{current_output.filename}")
+        # For stitched inputs, show the stitched image but use original images for processing
+        # For regular generated images, show the generated image
+        if (self.current_output.filename.startswith("input_stitched_") and 
+            self.original_images and len(self.original_images) > 1):
+            # Show stitched image but use original images for processing
+            img_buffer = io.BytesIO()
+            current_output.image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            file = discord.File(img_buffer, filename=current_output.filename)
+            embed.set_image(url=f"attachment://{current_output.filename}")
+            embed.add_field(name="Note", value="🔄 Will process using original input images", inline=False)
+        else:
+            # Preserve the current image in the request display
+            img_buffer = io.BytesIO()
+            current_output.image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            file = discord.File(img_buffer, filename=current_output.filename)
+            embed.set_image(url=f"attachment://{current_output.filename}")
         
         await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
     
@@ -702,16 +720,29 @@ async def handle_generation_request(message):
         # Convert input images to OutputItems for cycling interface
         input_outputs = []
         if images:
-            for i, img in enumerate(images):
+            if len(images) > 1:
+                # For multiple images, create single stitched OutputItem for display
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                stitched_image = create_stitched_image(images)
+                stitched_output = OutputItem(
+                    image=stitched_image,
+                    filename=f"input_stitched_{timestamp}.png",
+                    prompt_used=f"Stitched input from {len(images)} images",
+                    timestamp=timestamp
+                )
+                input_outputs.append(stitched_output)
+                logger.info(f"Created single stitched output for {len(images)} input images")
+            else:
+                # For single image, keep existing behavior
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 input_output = OutputItem(
-                    image=img,
-                    filename=f"input_{i}_{timestamp}.png",
+                    image=images[0],
+                    filename=f"input_0_{timestamp}.png",
                     prompt_used="Input image",
                     timestamp=timestamp
                 )
                 input_outputs.append(input_output)
-            logger.info(f"Created {len(input_outputs)} input outputs for cycling")
+                logger.info(f"Created single input output for single image")
         
         # Create preview embed with the request details
         embed = discord.Embed(
