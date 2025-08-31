@@ -114,6 +114,7 @@ class StyleOptionsView(discord.ui.View):
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
         self.original_images = original_images or []
+        self.message = None  # Will be set when the view is first used
         
         # Add the style select dropdown
         self.add_item(StyleSelect(self))
@@ -158,6 +159,10 @@ class StyleOptionsView(discord.ui.View):
         """Update the display with the current output."""
         if not self.outputs:
             return
+        
+        # Store message reference for timeout handling
+        if self.message is None:
+            self.message = interaction.message
             
         current_output = self.outputs[self.current_index]
         
@@ -324,6 +329,9 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Send with style options for chaining
                 await interaction.edit_original_response(embed=embed, view=style_view, attachments=[file])
+                
+                # Store message reference for timeout handling
+                style_view.message = await interaction.original_response()
                 
                 logger.info(f"Successfully generated and sent image for request: '{self.original_text[:50] if self.original_text and self.original_text.strip() else 'image-only transformation'}...'")
             else:
@@ -509,6 +517,9 @@ class StyleOptionsView(discord.ui.View):
                 
                 await interaction.edit_original_response(embed=embed, view=new_style_view, attachments=[styled_file])
                 
+                # Store message reference for timeout handling
+                new_style_view.message = await interaction.original_response()
+                
                 logger.info(f"Successfully applied {style_name} style: '{styled_filename}'")
             else:
                 # Update embed to show failure
@@ -537,6 +548,96 @@ class StyleOptionsView(discord.ui.View):
         # Disable all buttons when timeout occurs
         for item in self.children:
             item.disabled = True
+        
+        # If no message reference or no outputs, just disable buttons
+        if not self.message or not self.outputs:
+            try:
+                await self.message.edit(view=None)
+            except:
+                pass  # Message might be deleted or inaccessible
+            return
+        
+        try:
+            # Create files and embeds for all outputs (up to Discord's limit)
+            files = []
+            embeds = []
+            
+            # Discord has a limit of 10 embeds per message
+            max_embeds = min(10, len(self.outputs))
+            
+            for i, output in enumerate(self.outputs[:max_embeds]):
+                # Create file for this output
+                img_buffer = io.BytesIO()
+                output.image.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                
+                # Create unique filename to avoid conflicts
+                timeout_filename = f"timeout_{i}_{output.filename}"
+                file = discord.File(img_buffer, filename=timeout_filename)
+                files.append(file)
+                
+                # Create embed for this output
+                embed = discord.Embed(
+                    title=f"🕒 Final Output {i + 1}/{len(self.outputs)} (Timed Out)",
+                    color=0xff9900
+                )
+                
+                # Add prompt information
+                if output.prompt_used:
+                    embed.add_field(
+                        name="Prompt used:", 
+                        value=f"{output.prompt_used[:100]}{'...' if len(output.prompt_used) > 100 else ''}", 
+                        inline=False
+                    )
+                
+                # Add timestamp
+                embed.add_field(name="Generated:", value=output.timestamp, inline=True)
+                
+                # Set the image for this embed
+                embed.set_image(url=f"attachment://{timeout_filename}")
+                
+                # Add footer for the first embed
+                if i == 0:
+                    if len(self.outputs) > max_embeds:
+                        embed.set_footer(text=f"Session timed out. Showing {max_embeds} of {len(self.outputs)} outputs.")
+                    else:
+                        embed.set_footer(text="Session timed out. Here are all your outputs.")
+                
+                embeds.append(embed)
+            
+            # If no outputs were generated, create a single embed indicating that
+            if not embeds:
+                embed = discord.Embed(
+                    title="🕒 Session Timed Out",
+                    description="No outputs were generated during this session.",
+                    color=0xff9900
+                )
+                embed.set_footer(text="The interactive session has expired.")
+                embeds.append(embed)
+            
+            # Update the original message with all outputs
+            content = "🕒 **Timed out!** Here are all your output images:"
+            if len(self.outputs) > max_embeds:
+                content += f"\n*Showing {max_embeds} of {len(self.outputs)} outputs due to Discord limits.*"
+            elif not self.outputs:
+                content = "🕒 **Timed out!** No images were generated during this session."
+            
+            await self.message.edit(
+                content=content,
+                embeds=embeds,
+                attachments=files,
+                view=None
+            )
+            
+            logger.info(f"Successfully updated timeout message with {len(embeds)} embeds and {len(files)} files")
+            
+        except Exception as e:
+            logger.error(f"Error updating message on timeout: {e}")
+            # Fallback - just disable the view
+            try:
+                await self.message.edit(view=None)
+            except:
+                pass
 
 class ProcessRequestView(discord.ui.View):
     """View with buttons to process image generation request and apply style templates."""
@@ -808,6 +909,9 @@ class ProcessRequestView(discord.ui.View):
                 
                 # Send with style options for chaining
                 await interaction.edit_original_response(embed=embed, view=style_view, attachments=[file])
+                
+                # Store message reference for timeout handling
+                style_view.message = await interaction.original_response()
                 
                 logger.info(f"Successfully generated and sent image for request: '{self.text_content[:50] if self.text_content.strip() else 'image-only transformation'}...'")
             else:
