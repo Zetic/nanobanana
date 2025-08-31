@@ -175,7 +175,7 @@ class StyleOptionsView(discord.ui.View):
         
         # Create embed for current output
         embed = discord.Embed(
-            title="🎨 Generated Image - Nano Banana Bot",
+            title=f"🎨 Generated Image - {bot.user.display_name}",
             color=0x00ff00
         )
         
@@ -303,7 +303,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create final embed with result
                 embed = discord.Embed(
-                    title="🎨 Generated Image - Nano Banana Bot",
+                    title=f"🎨 Generated Image - {bot.user.display_name}",
                     color=0x00ff00
                 )
                 
@@ -476,7 +476,7 @@ class StyleOptionsView(discord.ui.View):
         
         # Create embed for current output
         embed = discord.Embed(
-            title="🎨 Generated Image - Nano Banana Bot",
+            title=f"🎨 Generated Image - {bot.user.display_name}",
             color=0x00ff00
         )
         
@@ -540,7 +540,7 @@ class StyleOptionsView(discord.ui.View):
             
             # Create embed for current output
             embed = discord.Embed(
-                title="🎨 Generated Image - Nano Banana Bot",
+                title=f"🎨 Generated Image - {bot.user.display_name}",
                 color=0x00ff00
             )
             
@@ -675,7 +675,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create final embed with styled result
                 embed = discord.Embed(
-                    title="🎨 Generated Image - Nano Banana Bot",
+                    title=f"🎨 Generated Image - {bot.user.display_name}",
                     color=0x00ff00
                 )
                 
@@ -1177,7 +1177,7 @@ class ProcessRequestView(discord.ui.View):
                 
                 # Create final embed with result
                 embed = discord.Embed(
-                    title="🎨 Generated Image - Nano Banana Bot",
+                    title=f"🎨 Generated Image - {bot.user.display_name}",
                     color=0x00ff00
                 )
                 
@@ -1287,16 +1287,26 @@ async def on_message(message):
     if message.author == bot.user:
         return
     
+    # Debug logging for mention detection
+    logger.debug(f"Message from {message.author.id}: '{message.content[:50]}...'")
+    logger.debug(f"Message mentions: {[user.id for user in message.mentions]}")
+    logger.debug(f"Bot user ID: {bot.user.id}")
+    logger.debug(f"Is reply: {message.reference is not None}")
+    if message.reference:
+        logger.debug(f"Reply to message ID: {message.reference.message_id}")
+    
     # Only process messages that mention the bot
     # This includes:
-    # - Direct mentions: "@Nano Banana create an image" 
-    # - Replies with mentions: "@Nano Banana use this image" (reply to bot's message)
+    # - Direct mentions: "@BotName create an image" 
+    # - Replies with mentions: "@BotName use this image" (reply to bot's message)
     # This excludes:
     # - Replies without mentions: "use this image" (reply to bot's message without @)
     # - Regular messages without mentions: "hello"
     if bot.user in message.mentions:
         logger.info(f"Processing message from {message.author.id} (mentioned bot)")
         await handle_generation_request(message)
+    else:
+        logger.debug(f"Ignoring message from {message.author.id} (no bot mention)")
     
     # Process commands
     await bot.process_commands(message)
@@ -1339,25 +1349,35 @@ async def handle_generation_request(message):
                 # Log information about the referenced message
                 if referenced_message.author == bot.user:
                     logger.info(f"Referenced message is from bot itself - extracting images from bot's own message")
+                    logger.info(f"Bot message has {len(referenced_message.attachments)} attachments")
                 else:
                     logger.info(f"Referenced message is from user {referenced_message.author.id}")
+                    logger.info(f"User message has {len(referenced_message.attachments)} attachments")
                 
                 # Extract images from the referenced message (including bot's own messages)
                 if referenced_message.attachments:
                     await status_msg.edit(content="📥 Downloading images from reply...")
+                    logger.info(f"Processing {len(referenced_message.attachments)} attachments from referenced message")
                     for attachment in referenced_message.attachments[:config.MAX_IMAGES - len(images)]:
+                        logger.debug(f"Processing attachment: {attachment.filename} ({attachment.size} bytes)")
                         if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                             if attachment.size <= config.MAX_IMAGE_SIZE:
                                 image = await download_image(attachment.url)
                                 if image:
                                     images.append(image)
                                     logger.info(f"Downloaded image from reply: {attachment.filename}")
+                                else:
+                                    logger.warning(f"Failed to download image from reply: {attachment.filename}")
                             else:
                                 logger.warning(f"Image too large in reply: {attachment.filename} ({attachment.size} bytes)")
+                        else:
+                            logger.debug(f"Skipping non-image attachment: {attachment.filename}")
                         
                         # Stop if we've reached the maximum number of images
                         if len(images) >= config.MAX_IMAGES:
                             break
+                else:
+                    logger.info(f"Referenced message has no attachments to extract")
                             
             except Exception as e:
                 logger.warning(f"Could not fetch referenced message: {e}")
@@ -1367,6 +1387,13 @@ async def handle_generation_request(message):
             text_content = "A banana"
             logger.info("No text provided, using default prompt: 'A banana'")
         
+        # Log final image count and summary
+        logger.info(f"Final processing summary: {len(images)} images extracted, text content: '{text_content[:50]}{'...' if len(text_content) > 50 else ''}'")
+        if images:
+            logger.info(f"Images will be used for image-to-image generation with prompt: '{text_content}'")
+        else:
+            logger.info(f"No images found, will do text-to-image generation with prompt: '{text_content}'")
+        
         # Keep the original message (no longer deleting it)
         
         # Don't create any OutputItems for initial uploads - show images directly in embed
@@ -1374,7 +1401,7 @@ async def handle_generation_request(message):
         
         # Create preview embed with the request details
         embed = discord.Embed(
-            title="🎨 Image Generation Request - Nano Banana Bot",
+            title=f"🎨 Image Generation Request - {bot.user.display_name}",
             color=0x0099ff
         )
         
@@ -1442,20 +1469,20 @@ async def handle_generation_request(message):
 async def info_command(ctx):
     """Show help information."""
     embed = discord.Embed(
-        title="🍌 Nano Banana Bot - Help",
+        title=f"🍌 {bot.user.display_name} - Help",
         description="I'm a bot that generates images using Google's AI!",
         color=0xffff00
     )
     embed.add_field(
         name="📋 How to use",
-        value="Just mention me (@Nano Banana) in a message with your prompt and optionally attach images!",
+        value=f"Just mention me ({bot.user.mention}) in a message with your prompt and optionally attach images!",
         inline=False
     )
     embed.add_field(
         name="🎨 Examples",
-        value="• `@Nano Banana Create a nano banana in space`\n"
-              "• `@Nano Banana Make this cat magical` (with image attached)\n"
-              "• `@Nano Banana Transform this into cyberpunk style` (with multiple images)",
+        value=f"• `{bot.user.mention} Create a nano banana in space`\n"
+              f"• `{bot.user.mention} Make this cat magical` (with image attached)\n"
+              f"• `{bot.user.mention} Transform this into cyberpunk style` (with multiple images)",
         inline=False
     )
     embed.add_field(
@@ -1490,7 +1517,7 @@ def main():
         logger.error("GOOGLE_API_KEY not found in environment variables")
         return
     
-    logger.info("Starting Nano Banana Discord Bot...")
+    logger.info("Starting Discord Bot...")
     bot.run(config.DISCORD_TOKEN)
 
 if __name__ == "__main__":
