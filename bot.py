@@ -372,6 +372,167 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
     
+    @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
+    async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Add an image to the current output by creating a new stitched output."""
+        # Send instructions to user for uploading an image
+        await interaction.response.send_message(
+            "📎 **Add Image to Output**\n\n"
+            "Please upload an image in your next message to add it to the current output. "
+            "The bot will create a new output that combines the source images with your new image.\n\n"
+            "*Note: Send only one image attachment in your next message.*", 
+            ephemeral=True
+        )
+        
+        # Set up a temporary listener for the next message from this user
+        def check(message):
+            return (message.author.id == interaction.user.id and 
+                   message.channel.id == interaction.channel.id and
+                   message.attachments and
+                   any(attachment.filename.lower().endswith(ext) 
+                       for attachment in message.attachments 
+                       for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+        
+        try:
+            # Wait for user to send a message with an image attachment
+            message = await interaction.client.wait_for('message', check=check, timeout=60.0)
+            
+            # Process the attached image
+            await self._process_add_image(interaction, message)
+            
+        except asyncio.TimeoutError:
+            # Send timeout message
+            await interaction.followup.send(
+                "⏰ **Timeout** - No image was received within 60 seconds. Please try again.", 
+                ephemeral=True
+            )
+    
+    async def _process_add_image(self, interaction: discord.Interaction, message):
+        """Process the uploaded image and create a new stitched output."""
+        try:
+            # Download the new image
+            attachment = message.attachments[0]  # Take the first image
+            if attachment.size > config.MAX_IMAGE_SIZE:
+                await interaction.followup.send(
+                    f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
+                    ephemeral=True
+                )
+                return
+            
+            new_image = await download_image(attachment.url)
+            if not new_image:
+                await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                return
+            
+            # Determine source images for the current output
+            source_images = self._get_source_images_for_current_output()
+            
+            # Add the new image to the source images
+            all_images = source_images + [new_image]
+            
+            # Create new stitched output
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stitched_image = create_stitched_image(all_images)
+            
+            # Save the stitched image
+            filename = f"stitched_{timestamp}.png"
+            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+            stitched_image.save(filepath)
+            
+            # Create new output item
+            new_output = OutputItem(
+                image=stitched_image,
+                filename=filename,
+                prompt_used=f"Stitched from {len(source_images)} original image(s) + 1 added image",
+                timestamp=timestamp
+            )
+            
+            # Add to outputs and update current index to the new output
+            self.outputs.append(new_output)
+            self.current_index = len(self.outputs) - 1
+            
+            # Update the display to show the new output
+            await self._update_display_after_add(interaction)
+            
+            # Delete the user's message with the image attachment to clean up
+            try:
+                await message.delete()
+            except:
+                pass  # Ignore if we can't delete
+            
+            # Send success message
+            await interaction.followup.send(
+                f"✅ **Image added successfully!** Created new output {len(self.outputs)}/{len(self.outputs)} "
+                f"combining {len(source_images)} original image(s) with your added image.",
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing added image: {e}")
+            await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
+    
+    def _get_source_images_for_current_output(self):
+        """Get the source images for the current output, avoiding stitched images as inputs."""
+        if not self.current_output:
+            return []
+            
+        current_output = self.current_output
+        
+        # If the current output is from original input images, use those
+        if current_output.filename.startswith("input_") and self.original_images:
+            return self.original_images.copy()
+        
+        # If it's a generated output and we have original images, use those
+        if self.original_images:
+            return self.original_images.copy()
+        
+        # Fallback: use the current output image (though this is not ideal per requirements)
+        return [current_output.image]
+    
+    async def _update_display_after_add(self, interaction: discord.Interaction):
+        """Update the display after adding an image (similar to _update_display but for followup)."""
+        if not self.outputs:
+            return
+        
+        current_output = self.outputs[self.current_index]
+        
+        # Create embed for current output
+        embed = discord.Embed(
+            title="🎨 Generated Image - Nano Banana Bot",
+            color=0x00ff00
+        )
+        
+        # Show prompts
+        prompt_used = current_output.prompt_used
+        current_prompt = self.original_text
+        
+        if prompt_used:
+            embed.add_field(name="Prompt used:", value=f"{prompt_used[:100]}{'...' if len(prompt_used) > 100 else ''}", inline=False)
+        
+        if current_prompt and current_prompt != prompt_used:
+            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100]}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        elif not prompt_used:
+            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100] if current_prompt else 'No prompt'}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        
+        if len(self.outputs) > 1:
+            embed.add_field(name="Output", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
+        
+        embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
+        
+        # Save current image to buffer for Discord
+        img_buffer = io.BytesIO()
+        current_output.image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        
+        # Update the original message with the new output
+        file = discord.File(img_buffer, filename=current_output.filename)
+        embed.set_image(url=f"attachment://{current_output.filename}")
+        
+        # Update button states
+        self._update_button_states()
+        
+        await interaction.edit_original_response(embed=embed, view=self, attachments=[file])
+
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit prompt for the generated image."""
@@ -712,6 +873,121 @@ class ProcessRequestView(discord.ui.View):
             
             await interaction.edit_original_response(embed=embed, view=self, attachments=[])
     
+    @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
+    async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Add an image to the current request before processing."""
+        # Send instructions to user for uploading an image
+        await interaction.response.send_message(
+            "📎 **Add Image to Request**\n\n"
+            "Please upload an image in your next message to add it to the current request. "
+            "This will convert your text-to-image request into a text + image request.\n\n"
+            "*Note: Send only one image attachment in your next message.*", 
+            ephemeral=True
+        )
+        
+        # Set up a temporary listener for the next message from this user
+        def check(message):
+            return (message.author.id == interaction.user.id and 
+                   message.channel.id == interaction.channel.id and
+                   message.attachments and
+                   any(attachment.filename.lower().endswith(ext) 
+                       for attachment in message.attachments 
+                       for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+        
+        try:
+            # Wait for user to send a message with an image attachment
+            message = await interaction.client.wait_for('message', check=check, timeout=60.0)
+            
+            # Process the attached image
+            await self._process_add_image_to_request(interaction, message)
+            
+        except asyncio.TimeoutError:
+            # Send timeout message
+            await interaction.followup.send(
+                "⏰ **Timeout** - No image was received within 60 seconds. Please try again.", 
+                ephemeral=True
+            )
+    
+    async def _process_add_image_to_request(self, interaction: discord.Interaction, message):
+        """Process the uploaded image and add it to the current request."""
+        try:
+            # Download the new image
+            attachment = message.attachments[0]  # Take the first image
+            if attachment.size > config.MAX_IMAGE_SIZE:
+                await interaction.followup.send(
+                    f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
+                    ephemeral=True
+                )
+                return
+            
+            new_image = await download_image(attachment.url)
+            if not new_image:
+                await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                return
+            
+            # Add the image to the request
+            self.images.append(new_image)
+            
+            # Update the display to show the new request configuration
+            await self._update_request_display_after_add(interaction)
+            
+            # Delete the user's message with the image attachment to clean up
+            try:
+                await message.delete()
+            except:
+                pass  # Ignore if we can't delete
+            
+            # Send success message
+            await interaction.followup.send(
+                f"✅ **Image added successfully!** Your request now includes {len(self.images)} image(s).",
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            logger.error(f"Error adding image to request: {e}")
+            await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
+    
+    async def _update_request_display_after_add(self, interaction: discord.Interaction):
+        """Update the request display after adding an image."""
+        # Create updated embed
+        embed = discord.Embed(
+            title="🎨 Image Generation Request - Nano Banana Bot",
+            color=0x0099ff
+        )
+        
+        # Set description based on what inputs we have
+        if self.text_content and self.images:
+            embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+            embed.add_field(name="Input Images", value=f"📎 {len(self.images)} image(s) attached", inline=True)
+            embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
+        elif self.text_content:
+            embed.description = f"**Prompt:** {self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}"
+            embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
+        elif self.images:
+            embed.description = "**Mode:** Image transformation and enhancement"
+            embed.add_field(name="Input Images", value=f"📎 {len(self.images)} image(s) attached", inline=True)
+            embed.add_field(name="Generation Type", value="🖼️ Image-only transformation", inline=True)
+            
+        embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
+        embed.set_footer(text="Click the button below to process your request")
+        
+        # Show preview image if we have images
+        attachments = []
+        if self.images:
+            if len(self.images) > 1:
+                display_image = create_stitched_image(self.images)
+            else:
+                display_image = self.images[0]
+            img_buffer = io.BytesIO()
+            display_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            preview_filename = f"preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            file = discord.File(img_buffer, filename=preview_filename)
+            embed.set_image(url=f"attachment://{preview_filename}")
+            attachments.append(file)
+        
+        await interaction.edit_original_response(embed=embed, view=self, attachments=attachments)
+
     
     async def apply_style_and_process(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style template and process."""
