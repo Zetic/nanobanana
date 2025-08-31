@@ -115,11 +115,18 @@ class StyleOptionsView(discord.ui.View):
         self.original_text = original_text
         self.original_images = original_images or []
         self.message = None  # Will be set when the view is first used
+        self._timeout_disabled = False  # Flag to disable timeout handling
         
         # Add the style select dropdown
         self.add_item(StyleSelect(self))
         
         self._update_button_states()
+    
+    def disable_timeout_handling(self):
+        """Disable timeout handling for this view to prevent staggered updates."""
+        self._timeout_disabled = True
+        # Stop the timeout by setting it to None, which cancels the timer
+        self.timeout = None
     
     def _update_button_states(self):
         """Update button states based on number of outputs."""
@@ -290,6 +297,9 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Add to existing outputs to create history
                 all_outputs = self.outputs + [new_output]
+                
+                # Disable current view's timeout handling to prevent staggered updates
+                self.disable_timeout_handling()
                 
                 # Create final embed with result
                 embed = discord.Embed(
@@ -485,6 +495,9 @@ class StyleOptionsView(discord.ui.View):
                 # Add to outputs history
                 new_outputs = self.outputs + [styled_output]
                 
+                # Disable current view's timeout handling to prevent staggered updates
+                self.disable_timeout_handling()
+                
                 # Create final embed with styled result
                 embed = discord.Embed(
                     title="🎨 Generated Image - Nano Banana Bot",
@@ -545,6 +558,10 @@ class StyleOptionsView(discord.ui.View):
     
     async def on_timeout(self):
         """Called when the view times out."""
+        # If timeout handling is disabled, don't process timeout
+        if self._timeout_disabled:
+            return
+            
         # Disable all buttons when timeout occurs
         for item in self.children:
             item.disabled = True
