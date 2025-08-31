@@ -416,9 +416,18 @@ class StyleOptionsView(discord.ui.View):
                     title="🎨 Generated Image - Nano Banana Bot",
                     color=0x00ff00
                 )
-                embed.add_field(name="Prompt used:", value="Sticker style: Black outline vector art with transparent background", inline=False)
+                
+                # Show prompt used for this generation (use actual sticker prompt)
+                embed.add_field(name="Prompt used:", value=f"{sticker_prompt[:100]}{'...' if len(sticker_prompt) > 100 else ''}", inline=False)
+                
+                # Show output count if we have multiple
+                if len(new_outputs) > 1:
+                    embed.add_field(name="Output", value=f"{len(new_outputs)} of {len(new_outputs)}", inline=True)
+                
                 embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
-                embed.set_footer(text="Converted to sticker style")
+                
+                # Set footer based on what was used for generation
+                embed.set_footer(text="Generated using 1 input image(s) with sticker template")
                 
                 # Save image to buffer for Discord
                 img_buffer = io.BytesIO()
