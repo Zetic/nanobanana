@@ -582,15 +582,15 @@ class StyleOptionsView(discord.ui.View):
         
     @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
     async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Add an image to the current output by creating a new stitched output."""
+        """Add an image to the current output for combined processing."""
         # Defer the interaction to keep it bound to the original message
         await interaction.response.defer()
         
         # Send instructions to user for uploading an image
         await interaction.followup.send(
-            "📎 **Add Image to Output**\n\n"
-            "Please upload an image in your next message to add it to the current output. "
-            "The bot will create a new output that combines the source images with your new image.\n\n"
+            "📎 **Add Image for Combined Processing**\n\n"
+            "Please upload an image in your next message to add it to the current images. "
+            "This will show you a preview of the combined images and allow processing them together.\n\n"
             "*Note: Send only one image attachment in your next message.*", 
             ephemeral=True
         )
