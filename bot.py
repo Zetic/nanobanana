@@ -219,9 +219,15 @@ class StyleOptionsView(discord.ui.View):
         for item in self.children:
             item.disabled = True
             
-        # Determine images to use - use original images if we have multiple inputs
+        # Determine images to use - use source images from stitched displays or original images
         images_to_use = [self.current_output.image]
-        if self.original_images and len(self.original_images) > 1:
+        if (hasattr(self.current_output, 'is_stitched_display') and 
+            self.current_output.is_stitched_display and 
+            hasattr(self.current_output, 'source_images') and 
+            self.current_output.source_images):
+            # If current output is a stitched display, use its source images
+            images_to_use = self.current_output.source_images
+        elif self.original_images and len(self.original_images) > 1:
             # If we have multiple original images, use those instead of the current single output
             images_to_use = self.original_images
         
@@ -426,6 +432,13 @@ class StyleOptionsView(discord.ui.View):
             return []
             
         current_output = self.current_output
+        
+        # If the current output is a stitched display, use its source images
+        if (hasattr(current_output, 'is_stitched_display') and 
+            current_output.is_stitched_display and 
+            hasattr(current_output, 'source_images') and 
+            current_output.source_images):
+            return current_output.source_images.copy()
         
         # If the current output is from original input images, use those
         if current_output.filename.startswith("input_") and self.original_images:
@@ -1214,13 +1227,19 @@ class ProcessRequestView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                # Pass original images from existing outputs if available
-                original_images_for_view = self.images
+                # Pass original images from input for proper processing
+                original_images_for_view = images  # Use the original PIL images directly
                 if self.existing_outputs:
-                    # Extract original PIL images from input OutputItems for the view
-                    original_images_for_view = [output.image for output in self.existing_outputs if "input_" in output.filename]
-                    if not original_images_for_view:
-                        original_images_for_view = self.images
+                    # Check if we have stitched displays and extract their source images
+                    for output in self.existing_outputs:
+                        if hasattr(output, 'is_stitched_display') and output.is_stitched_display and output.source_images:
+                            original_images_for_view = output.source_images
+                            break
+                    # Fallback: extract images from input OutputItems if needed
+                    if not original_images_for_view or original_images_for_view == images:
+                        output_images = [output.image for output in self.existing_outputs if not (hasattr(output, 'is_stitched_display') and output.is_stitched_display)]
+                        if output_images:
+                            original_images_for_view = output_images
                 
                 style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view)
                 
@@ -1348,20 +1367,34 @@ async def handle_generation_request(message):
             logger.warning(f"Could not delete original message: {e}")
             # Continue processing even if deletion fails
         
-        # Convert input images to OutputItems for cycling interface
+        # Convert input images to OutputItems for interface
         input_outputs = []
         if images:
-            # Create individual OutputItems for each image (never create stitched inputs as outputs)
-            for i, image in enumerate(images):
+            if len(images) > 1:
+                # For multiple images, create single stitched display (ephemeral, not saved to disk)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                stitched_image = create_stitched_image(images)
+                stitched_output = OutputItem(
+                    image=stitched_image,
+                    filename=f"stitched_display_{timestamp}.png",
+                    prompt_used=f"Combined display from {len(images)} images",
+                    timestamp=timestamp,
+                    is_stitched_display=True,  # Mark as ephemeral display
+                    source_images=images.copy()  # Store original images for processing
+                )
+                input_outputs.append(stitched_output)
+                logger.info(f"Created single stitched display for {len(images)} input images")
+            else:
+                # For single image, create normal input output
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 input_output = OutputItem(
-                    image=image,
-                    filename=f"input_{i}_{timestamp}.png",
-                    prompt_used=f"Input image {i + 1}" if len(images) > 1 else "Input image",
+                    image=images[0],
+                    filename=f"input_{timestamp}.png",
+                    prompt_used="Input image",
                     timestamp=timestamp
                 )
                 input_outputs.append(input_output)
-            logger.info(f"Created {len(input_outputs)} individual input outputs for {len(images)} images")
+                logger.info(f"Created single input output for single image")
         
         # Create preview embed with the request details
         embed = discord.Embed(
