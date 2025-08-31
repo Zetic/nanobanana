@@ -26,6 +26,8 @@ class OutputItem:
     filename: str
     prompt_used: str  # The prompt that generated this output
     timestamp: str
+    is_stitched_display: bool = False  # True if this is a stitched display item (not a real output)
+    source_images: List = None  # Original images that compose this output (for stitched displays)
 
 class PromptModal(discord.ui.Modal):
     """Modal for editing the prompt text."""
@@ -217,11 +219,10 @@ class StyleOptionsView(discord.ui.View):
         for item in self.children:
             item.disabled = True
             
-        # Determine images to use - use original images if current output is stitched input
+        # Determine images to use - use original images if we have multiple inputs
         images_to_use = [self.current_output.image]
-        if (self.current_output.filename.startswith("input_stitched_") and 
-            self.original_images and len(self.original_images) > 1):
-            # If processing a stitched input, use the original input images
+        if self.original_images and len(self.original_images) > 1:
+            # If we have multiple original images, use those instead of the current single output
             images_to_use = self.original_images
         
         # Update button label to show processing
@@ -374,7 +375,7 @@ class StyleOptionsView(discord.ui.View):
     
     
     async def _process_add_image(self, interaction: discord.Interaction, message):
-        """Process the uploaded image and create a new stitched output."""
+        """Process the uploaded image by adding it to the source images (never save stitched outputs)."""
         try:
             # Download the new image
             attachment = message.attachments[0]  # Take the first image
@@ -393,32 +394,14 @@ class StyleOptionsView(discord.ui.View):
             # Determine source images for the current output
             source_images = self._get_source_images_for_current_output()
             
-            # Add the new image to the source images
+            # Add the new image to the source images (this becomes our new working set)
             all_images = source_images + [new_image]
             
-            # Create new stitched output
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            stitched_image = create_stitched_image(all_images)
+            # Update original_images to include the new image
+            self.original_images = all_images
             
-            # Save the stitched image
-            filename = f"stitched_{timestamp}.png"
-            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-            stitched_image.save(filepath)
-            
-            # Create new output item
-            new_output = OutputItem(
-                image=stitched_image,
-                filename=filename,
-                prompt_used=f"Stitched from {len(source_images)} original image(s) + 1 added image",
-                timestamp=timestamp
-            )
-            
-            # Add to outputs and update current index to the new output
-            self.outputs.append(new_output)
-            self.current_index = len(self.outputs) - 1
-            
-            # Update the display to show the new output
-            await self._update_display_after_add(interaction)
+            # Update the display to show the combined images (ephemeral stitched view)
+            await self._update_display_with_combined_images(interaction, all_images)
             
             # Delete the user's message with the image attachment to clean up
             try:
@@ -428,8 +411,8 @@ class StyleOptionsView(discord.ui.View):
             
             # Send success message
             await interaction.followup.send(
-                f"✅ **Image added successfully!** Created new output {len(self.outputs)}/{len(self.outputs)} "
-                f"combining {len(source_images)} original image(s) with your added image.",
+                f"✅ **Image added successfully!** Now viewing {len(all_images)} combined images. "
+                f"This is a preview - no stitched output was created.",
                 ephemeral=True
             )
             
@@ -493,6 +476,45 @@ class StyleOptionsView(discord.ui.View):
         # Update the original message with the new output
         file = discord.File(img_buffer, filename=current_output.filename)
         embed.set_image(url=f"attachment://{current_output.filename}")
+        
+        # Update button states
+        self._update_button_states()
+        
+        await interaction.edit_original_response(embed=embed, view=self, attachments=[file])
+
+    async def _update_display_with_combined_images(self, interaction: discord.Interaction, combined_images: List):
+        """Update the display to show combined images as an ephemeral stitched view (not a persistent output)."""
+        # Create embed for the combined view
+        embed = discord.Embed(
+            title="🎨 Combined Images Preview - Nano Banana Bot",
+            color=0x00ff00
+        )
+        
+        # Show current prompt
+        current_prompt = self.original_text
+        if current_prompt:
+            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100]}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        else:
+            embed.add_field(name="Current Prompt:", value="No prompt", inline=False)
+        
+        embed.add_field(name="Preview", value=f"Showing {len(combined_images)} combined images", inline=True)
+        embed.add_field(name="Status", value="✅ Images combined! This is a preview - use 'Process Prompt' to generate.", inline=False)
+        
+        # Create ephemeral stitched image for display only
+        if len(combined_images) > 1:
+            display_image = create_stitched_image(combined_images)
+        else:
+            display_image = combined_images[0]
+        
+        # Save display image to buffer for Discord (not to disk)
+        img_buffer = io.BytesIO()
+        display_image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        
+        # Create filename for Discord attachment (this is temporary, not saved)
+        display_filename = f"combined_preview_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        file = discord.File(img_buffer, filename=display_filename)
+        embed.set_image(url=f"attachment://{display_filename}")
         
         # Update button states
         self._update_button_states()
@@ -1329,29 +1351,17 @@ async def handle_generation_request(message):
         # Convert input images to OutputItems for cycling interface
         input_outputs = []
         if images:
-            if len(images) > 1:
-                # For multiple images, create single stitched OutputItem for display
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                stitched_image = create_stitched_image(images)
-                stitched_output = OutputItem(
-                    image=stitched_image,
-                    filename=f"input_stitched_{timestamp}.png",
-                    prompt_used=f"Stitched input from {len(images)} images",
-                    timestamp=timestamp
-                )
-                input_outputs.append(stitched_output)
-                logger.info(f"Created single stitched output for {len(images)} input images")
-            else:
-                # For single image, keep existing behavior
+            # Create individual OutputItems for each image (never create stitched inputs as outputs)
+            for i, image in enumerate(images):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 input_output = OutputItem(
-                    image=images[0],
-                    filename=f"input_0_{timestamp}.png",
-                    prompt_used="Input image",
+                    image=image,
+                    filename=f"input_{i}_{timestamp}.png",
+                    prompt_used=f"Input image {i + 1}" if len(images) > 1 else "Input image",
                     timestamp=timestamp
                 )
                 input_outputs.append(input_output)
-                logger.info(f"Created single input output for single image")
+            logger.info(f"Created {len(input_outputs)} individual input outputs for {len(images)} images")
         
         # Create preview embed with the request details
         embed = discord.Embed(
