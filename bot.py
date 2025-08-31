@@ -374,15 +374,16 @@ class StyleOptionsView(discord.ui.View):
     
     
     async def _process_add_image(self, interaction: discord.Interaction, message, instruction_msg):
-        """Process the uploaded image(s) and create a new stitched step."""
+        """Process the uploaded image and create a new stitched step."""
         try:
             # Check if message contains text - if so, update the current prompt
             if message.content.strip():
                 self.original_text = message.content.strip()
             
-            # Download all image attachments
+            # Download the first image attachment only
             new_images = []
-            for attachment in message.attachments:
+            if message.attachments:
+                attachment = message.attachments[0]  # Only process the first attachment
                 if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                     if attachment.size > config.MAX_IMAGE_SIZE:
                         await interaction.followup.send(
@@ -925,16 +926,17 @@ class ProcessRequestView(discord.ui.View):
                 pass
     
     async def _process_add_image_to_request(self, interaction: discord.Interaction, message, instruction_msg):
-        """Process the uploaded image(s) and add them to the current request."""
+        """Process the uploaded image and add it to the current request."""
         try:
             # Check if message contains text - if so, update the current prompt
             if message.content.strip():
                 self.text_content = message.content.strip()
                 self.original_text = message.content.strip()  # Update original text as well
             
-            # Download all image attachments
+            # Download the first image attachment only
             new_images = []
-            for attachment in message.attachments:
+            if message.attachments:
+                attachment = message.attachments[0]  # Only process the first attachment
                 if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                     if attachment.size > config.MAX_IMAGE_SIZE:
                         await interaction.followup.send(
@@ -1316,19 +1318,19 @@ async def handle_generation_request(message):
         
         logger.info(f"Processing request with text: '{text_content}'")
         
-        # Extract images from attachments
+        # Extract image from first attachment only
         images = []
         if message.attachments:
-            await status_msg.edit(content="📥 Downloading images...")
-            for attachment in message.attachments[:config.MAX_IMAGES]:
-                if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
-                    if attachment.size <= config.MAX_IMAGE_SIZE:
-                        image = await download_image(attachment.url)
-                        if image:
-                            images.append(image)
-                            logger.info(f"Downloaded image: {attachment.filename}")
-                    else:
-                        logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
+            await status_msg.edit(content="📥 Downloading image...")
+            attachment = message.attachments[0]  # Only process the first attachment
+            if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+                if attachment.size <= config.MAX_IMAGE_SIZE:
+                    image = await download_image(attachment.url)
+                    if image:
+                        images.append(image)
+                        logger.info(f"Downloaded image: {attachment.filename}")
+                else:
+                    logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
         
         # Validate that we have either text or images (or both)
         if not text_content and not images:

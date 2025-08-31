@@ -1,12 +1,11 @@
 # 🍌 Nano Banana Discord Bot
 
-A Discord bot that generates stunning images using Google's Gemini AI image generation capabilities. The bot can create images from text prompts, transform existing images, and process multiple images simultaneously for enhanced AI generation.
+A Discord bot that generates stunning images using Google's Gemini AI image generation capabilities. The bot can create images from text prompts and transform existing images using AI.
 
 ## ✨ Features
 
 - **Text-to-Image Generation**: Create images from descriptive text prompts
 - **Image-to-Image Transformation**: Transform uploaded images using AI
-- **Multi-Image Processing**: Process multiple images simultaneously for enhanced generation
 - **Template Styles**: Apply preset styles like "Sticker" for consistent styling
 - **Chained Modifications**: Apply styles to generated images for iterative improvements
 - **Discord Integration**: Simple mention-based interaction
@@ -68,11 +67,6 @@ python main.py
   @Nano Banana Make this cat look cyberpunk (with image attached)
   ```
 
-- **Multiple images** will be processed simultaneously:
-  ```
-  @Nano Banana Combine these into a fantasy scene (with multiple images)
-  ```
-
 ### Template Styles
 
 The bot includes preset template styles that can be applied to enhance your images:
@@ -102,7 +96,7 @@ After any image is generated, you can apply additional styles using the style bu
 
 The bot can be configured in `config.py`:
 
-- `MAX_IMAGE_SIZE`: Maximum size per image (default: 8MB)
+- `MAX_IMAGE_SIZE`: Maximum size per image (default: 16MB)
 - `MAX_IMAGES`: Maximum number of images to process (default: 10)
 - `GENERATED_IMAGES_DIR`: Directory to store generated images
 
@@ -141,12 +135,6 @@ The bot uses Google's Gemini 2.5 Flash Image Preview model for generation:
 @Nano Banana Transform this into a magical fairy tale scene
 ```
 *(with image attached)*
-
-### Multi-Image Processing
-```
-@Nano Banana Combine these characters in an epic battle scene
-```
-*(with multiple images attached)*
 
 ## 🤝 Contributing
 

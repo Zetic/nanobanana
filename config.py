@@ -13,7 +13,7 @@ GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 
 # Bot configuration
 COMMAND_PREFIX = '!'
-MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8MB max per image
+MAX_IMAGE_SIZE = 16 * 1024 * 1024  # 16MB max per image
 MAX_IMAGES = 10  # Maximum number of images to process
 GENERATED_IMAGES_DIR = 'generated_images'
 
