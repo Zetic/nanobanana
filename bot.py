@@ -637,9 +637,24 @@ class StyleOptionsView(discord.ui.View):
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit prompt for the generated image."""
         if not self.current_output:
-            # Handle persistent view with no context - show helpful error
-            await self._update_display(interaction)
-            return
+            # Try to restore state from persistence
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.outputs = restored_view.outputs
+                self.current_index = restored_view.current_index
+                self.original_text = restored_view.original_text
+                self.original_images = restored_view.original_images
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with edit prompt if we now have outputs
+                if not self.current_output:
+                    await self._show_persistence_failure(interaction)
+                    return
+            else:
+                # Show persistence failure message
+                await self._show_persistence_failure(interaction)
+                return
             
         # Use the current output's prompt_used as the default value
         default_prompt = ""
@@ -701,9 +716,24 @@ class StyleOptionsView(discord.ui.View):
     async def apply_style(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style to the generated image."""
         if not self.current_output:
-            # Handle persistent view with no context - show helpful error
-            await self._update_display(interaction)
-            return
+            # Try to restore state from persistence
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.outputs = restored_view.outputs
+                self.current_index = restored_view.current_index
+                self.original_text = restored_view.original_text
+                self.original_images = restored_view.original_images
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with style application if we now have outputs
+                if not self.current_output:
+                    await self._show_persistence_failure(interaction)
+                    return
+            else:
+                # Show persistence failure message
+                await self._show_persistence_failure(interaction)
+                return
             
         try:
             # Disable all buttons to prevent multiple clicks
