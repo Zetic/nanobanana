@@ -974,9 +974,65 @@ async def restore_existing_jobs():
                     logger.info(f"Restored ProcessRequestView for job {job_id}")
                     
                 elif job.current_view_type == "StyleOptionsView":
-                    # For StyleOptionsView, we'd need to reconstruct outputs
-                    # This is more complex, so for now we'll just log
-                    logger.info(f"StyleOptionsView restoration not yet implemented for job {job_id}")
+                    # Reconstruct StyleOptionsView with available data
+                    try:
+                        # Load input images from job
+                        input_images = []
+                        for img_path in job.input_image_paths:
+                            if os.path.exists(img_path):
+                                from PIL import Image
+                                input_images.append(Image.open(img_path))
+                        
+                        # Load output images and create OutputItems
+                        outputs = []
+                        for img_path in job.output_image_paths:
+                            if os.path.exists(img_path):
+                                from PIL import Image
+                                output_image = Image.open(img_path)
+                                # Extract filename and create OutputItem
+                                filename = os.path.basename(img_path)
+                                output_item = OutputItem(
+                                    image=output_image,
+                                    filename=filename,
+                                    prompt_used=job.original_text,  # Use original text as best guess
+                                    timestamp=job.updated_at
+                                )
+                                outputs.append(output_item)
+                        
+                        if outputs:
+                            # Create StyleOptionsView with reconstructed data
+                            view = StyleOptionsView(
+                                outputs=outputs,
+                                current_index=job.current_output_index,
+                                original_text=job.original_text,
+                                original_images=input_images,
+                                job_id=job_id
+                            )
+                            
+                            # Re-attach the view to the message
+                            bot.add_view(view, message_id=job.message_id)
+                            logger.info(f"Restored StyleOptionsView for job {job_id} with {len(outputs)} outputs")
+                        else:
+                            logger.warning(f"No output images found for StyleOptionsView job {job_id}")
+                    
+                    except Exception as e:
+                        logger.error(f"Error restoring StyleOptionsView for job {job_id}: {e}")
+                        # Fall back to ProcessRequestView if StyleOptionsView restoration fails
+                        logger.info(f"Falling back to ProcessRequestView for job {job_id}")
+                        input_images = []
+                        for img_path in job.input_image_paths:
+                            if os.path.exists(img_path):
+                                from PIL import Image
+                                input_images.append(Image.open(img_path))
+                        
+                        view = ProcessRequestView(
+                            text_content=job.original_text,
+                            images=input_images,
+                            existing_outputs=[],
+                            job_id=job_id
+                        )
+                        bot.add_view(view, message_id=job.message_id)
+                        logger.info(f"Restored ProcessRequestView fallback for job {job_id}")
                 
             except Exception as e:
                 logger.error(f"Error restoring job {job_id}: {e}")
