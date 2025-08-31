@@ -47,8 +47,66 @@ class PromptModal(discord.ui.Modal):
         self.new_prompt = self.prompt_input.value
         await interaction.response.defer()
 
+class ProcessStyleSelect(discord.ui.Select):
+    """Dropdown select for choosing art styles in ProcessRequestView."""
+    
+    def __init__(self, request_view):
+        self.request_view = request_view
+        options = []
+        
+        # Create options from available templates
+        for style_key, style_data in config.TEMPLATES.items():
+            options.append(discord.SelectOption(
+                label=style_data['name'],
+                description=style_data['image_only'][:100],  # Truncate description
+                emoji=style_data['emoji'],
+                value=style_key
+            ))
+        
+        super().__init__(
+            placeholder="Choose a style to apply...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1  # Place in second row below main buttons
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        """Handle style selection."""
+        selected_style = self.values[0]
+        await self.request_view.apply_style_and_process(interaction, selected_style)
+
+class StyleSelect(discord.ui.Select):
+    """Dropdown select for choosing art styles."""
+    
+    def __init__(self, style_view):
+        self.style_view = style_view
+        options = []
+        
+        # Create options from available templates
+        for style_key, style_data in config.TEMPLATES.items():
+            options.append(discord.SelectOption(
+                label=style_data['name'],
+                description=style_data['image_only'][:100],  # Truncate description
+                emoji=style_data['emoji'],
+                value=style_key
+            ))
+        
+        super().__init__(
+            placeholder="Choose a style to apply...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1  # Place in second row below navigation buttons
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        """Handle style selection."""
+        selected_style = self.values[0]
+        await self.style_view.apply_style(interaction, selected_style)
+
 class StyleOptionsView(discord.ui.View):
-    """View with style buttons for chaining modifications on generated images."""
+    """View with style selection for chaining modifications on generated images."""
     
     def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=300):
         super().__init__(timeout=timeout)
@@ -56,6 +114,10 @@ class StyleOptionsView(discord.ui.View):
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
         self.original_images = original_images or []
+        
+        # Add the style select dropdown
+        self.add_item(StyleSelect(self))
+        
         self._update_button_states()
     
     def _update_button_states(self):
@@ -351,9 +413,9 @@ class StyleOptionsView(discord.ui.View):
             
             await interaction.edit_original_response(embed=embed, view=self, attachments=[file])
         
-    @discord.ui.button(label='🏷️ Make Sticker', style=discord.ButtonStyle.secondary)
-    async def sticker_style_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Apply sticker style to the generated image."""
+    
+    async def apply_style(self, interaction: discord.Interaction, style_key: str):
+        """Apply selected style to the generated image."""
         if not self.current_output:
             return
             
@@ -362,8 +424,14 @@ class StyleOptionsView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             
-            # Update button label to show processing
-            button.label = '⏳ Processing...'
+            # Get style template
+            style_template = config.TEMPLATES.get(style_key)
+            if not style_template:
+                logger.error(f"Unknown style: {style_key}")
+                return
+                
+            style_name = style_template['name']
+            style_prompt = style_template['image_only']
             
             # Update embed to show processing (using consistent embed style)
             embed = discord.Embed(
@@ -371,54 +439,52 @@ class StyleOptionsView(discord.ui.View):
                 color=0xffaa00
             )
             
-            # Apply sticker template to the generated image
-            sticker_prompt = config.TEMPLATES['sticker']['image_only']
-            embed.description = f"**Prompt:** {sticker_prompt[:100]}{'...' if len(sticker_prompt) > 100 else ''}"
-            embed.set_footer(text="Using 1 input image(s) with sticker template")
+            embed.description = f"**Prompt:** {style_prompt[:100]}{'...' if len(style_prompt) > 100 else ''}"
+            embed.set_footer(text=f"Using 1 input image(s) with {style_name.lower()} template")
             
             # Add input image to embed
             img_buffer = io.BytesIO()
             self.current_output.image.save(img_buffer, format='PNG')
             img_buffer.seek(0)
-            input_filename = f"sticker_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            input_filename = f"{style_key}_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             file = discord.File(img_buffer, filename=input_filename)
             embed.set_image(url=f"attachment://{input_filename}")
             
-            embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
+            embed.add_field(name="Status", value=f"🔄 Generating {style_name.lower()} with AI...", inline=False)
             
             await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
             
-            # Generate new image with sticker style
-            sticker_image = await get_image_generator().generate_image_from_text_and_image(
-                sticker_prompt, self.current_output.image
+            # Generate new image with selected style
+            styled_image = await get_image_generator().generate_image_from_text_and_image(
+                style_prompt, self.current_output.image
             )
             
-            if sticker_image:
-                # Save the new sticker image
+            if styled_image:
+                # Save the new styled image
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                sticker_filename = f"sticker_{timestamp}.png"
-                sticker_filepath = os.path.join(config.GENERATED_IMAGES_DIR, sticker_filename)
-                sticker_image.save(sticker_filepath)
+                styled_filename = f"{style_key}_{timestamp}.png"
+                styled_filepath = os.path.join(config.GENERATED_IMAGES_DIR, styled_filename)
+                styled_image.save(styled_filepath)
                 
-                # Create new output item for the sticker
-                sticker_output = OutputItem(
-                    image=sticker_image,
-                    filename=sticker_filename,
-                    prompt_used=f"Sticker style: {sticker_prompt}",
+                # Create new output item for the styled image
+                styled_output = OutputItem(
+                    image=styled_image,
+                    filename=styled_filename,
+                    prompt_used=f"{style_name} style: {style_prompt}",
                     timestamp=timestamp
                 )
                 
                 # Add to outputs history
-                new_outputs = self.outputs + [sticker_output]
+                new_outputs = self.outputs + [styled_output]
                 
-                # Create final embed with sticker result
+                # Create final embed with styled result
                 embed = discord.Embed(
                     title="🎨 Generated Image - Nano Banana Bot",
                     color=0x00ff00
                 )
                 
-                # Show prompt used for this generation (use actual sticker prompt)
-                embed.add_field(name="Prompt used:", value=f"{sticker_prompt[:100]}{'...' if len(sticker_prompt) > 100 else ''}", inline=False)
+                # Show prompt used for this generation
+                embed.add_field(name="Prompt used:", value=f"{style_prompt[:100]}{'...' if len(style_prompt) > 100 else ''}", inline=False)
                 
                 # Show output count if we have multiple
                 if len(new_outputs) > 1:
@@ -427,36 +493,36 @@ class StyleOptionsView(discord.ui.View):
                 embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
                 
                 # Set footer based on what was used for generation
-                embed.set_footer(text="Generated using 1 input image(s) with sticker template")
+                embed.set_footer(text=f"Generated using 1 input image(s) with {style_name.lower()} template")
                 
                 # Save image to buffer for Discord
                 img_buffer = io.BytesIO()
-                sticker_image.save(img_buffer, format='PNG')
+                styled_image.save(img_buffer, format='PNG')
                 img_buffer.seek(0)
                 
                 # Create new style options view for further chaining
                 new_style_view = StyleOptionsView(new_outputs, len(new_outputs) - 1, self.original_text, self.original_images)
                 
-                # Send the sticker result
-                sticker_file = discord.File(img_buffer, filename=sticker_filename)
-                embed.set_image(url=f"attachment://{sticker_filename}")
+                # Send the styled result
+                styled_file = discord.File(img_buffer, filename=styled_filename)
+                embed.set_image(url=f"attachment://{styled_filename}")
                 
-                await interaction.edit_original_response(embed=embed, view=new_style_view, attachments=[sticker_file])
+                await interaction.edit_original_response(embed=embed, view=new_style_view, attachments=[styled_file])
                 
-                logger.info(f"Successfully applied sticker style: '{sticker_filename}'")
+                logger.info(f"Successfully applied {style_name} style: '{styled_filename}'")
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
                     title="❌ Generation Failed - Nano Banana Bot",
-                    description="Failed to apply sticker style to the image.",
+                    description=f"Failed to apply {style_name.lower()} style to the image.",
                     color=0xff0000
                 )
                 embed.add_field(name="Status", value="❌ Please try again.", inline=False)
                 await interaction.edit_original_response(embed=embed, view=None)
-                logger.error("Failed to apply sticker style")
+                logger.error(f"Failed to apply {style_name} style")
                 
         except Exception as e:
-            logger.error(f"Error applying sticker style: {e}")
+            logger.error(f"Error applying {style_key} style: {e}")
             # Update embed to show error
             embed = discord.Embed(
                 title="❌ Error - Nano Banana Bot",
@@ -481,6 +547,9 @@ class ProcessRequestView(discord.ui.View):
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
         self.existing_outputs = existing_outputs or []
+        
+        # Add the style select dropdown
+        self.add_item(ProcessStyleSelect(self))
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -525,28 +594,36 @@ class ProcessRequestView(discord.ui.View):
             
             await interaction.edit_original_response(embed=embed, view=self, attachments=[])
     
-    @discord.ui.button(label='🏷️ Sticker', style=discord.ButtonStyle.secondary)
-    async def sticker_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Apply sticker template and process."""
-        # Apply the sticker template
-        self._apply_template('sticker')
+    
+    async def apply_style_and_process(self, interaction: discord.Interaction, style_key: str):
+        """Apply selected style template and process."""
+        # Apply the selected template
+        self._apply_template(style_key)
+        
+        # Get style info
+        style_template = config.TEMPLATES.get(style_key)
+        if not style_template:
+            logger.error(f"Unknown style: {style_key}")
+            return
+            
+        style_name = style_template['name']
         
         # Update the embed to show processing (using consistent style)
         embed = discord.Embed(
             title="🎨 Processing Request - Nano Banana Bot",
-            description=f"**Prompt:** {self.text_content[:100] if self.text_content else 'Sticker template applied'}{'...' if len(self.text_content) > 100 else ''}",
+            description=f"**Prompt:** {self.text_content[:100] if self.text_content else f'{style_name} template applied'}{'...' if len(self.text_content) > 100 else ''}",
             color=0xffaa00
         )
-        embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
+        embed.add_field(name="Status", value=f"🔄 Generating {style_name.lower()} with AI...", inline=False)
         if self.images:
-            embed.set_footer(text=f"Using {len(self.images)} input image(s) with sticker template")
+            embed.set_footer(text=f"Using {len(self.images)} input image(s) with {style_name.lower()} template")
         else:
-            embed.set_footer(text="Generating sticker from text prompt")
+            embed.set_footer(text=f"Generating {style_name.lower()} from text prompt")
         
         await interaction.response.edit_message(embed=embed, view=self)
         
         # Process the request with the templated prompt
-        await self._process_request(interaction, button, is_template_applied=True)
+        await self._process_request(interaction, None, is_template_applied=True)
     
     def _apply_template(self, template_name: str):
         """Apply a template to modify the text content."""
@@ -566,9 +643,7 @@ class ProcessRequestView(discord.ui.View):
             text_to_use = self.original_text.strip() or "an image"
             self.text_content = template['text_only'].format(text=text_to_use)
     
-    async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button, is_template_applied: bool = False):
-        """Handle the actual image processing."""
-    async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button, is_template_applied: bool = False):
+    async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button = None, is_template_applied: bool = False):
         """Handle the actual image processing."""
         try:
             # Disable all buttons to prevent multiple clicks
@@ -576,7 +651,8 @@ class ProcessRequestView(discord.ui.View):
                 item.disabled = True
             
             if not is_template_applied:
-                button.label = '⏳ Processing...'
+                if button:
+                    button.label = '⏳ Processing...'
                 
                 # Update embed to show processing
                 embed = discord.Embed(
