@@ -116,6 +116,11 @@ class ProcessStyleSelect(discord.ui.Select):
     
     async def callback(self, interaction: discord.Interaction):
         """Handle style selection."""
+        # Check if the parent view has context (not a persistent view after restart)
+        if not self.request_view.text_content and not self.request_view.images:
+            await self.request_view._handle_missing_context(interaction, "apply styles")
+            return
+            
         selected_style = self.values[0]
         await self.request_view.apply_style_and_process(interaction, selected_style)
 
@@ -146,6 +151,11 @@ class StyleSelect(discord.ui.Select):
     
     async def callback(self, interaction: discord.Interaction):
         """Handle style selection."""
+        # Check if the parent view has context (not a persistent view after restart)
+        if not self.style_view.outputs:
+            await self.style_view._handle_missing_context(interaction, "apply styles")
+            return
+            
         selected_style = self.values[0]
         await self.style_view.apply_style(interaction, selected_style)
 
@@ -180,9 +190,36 @@ class StyleOptionsView(discord.ui.View):
             return self.outputs[self.current_index]
         return None
     
+    async def _handle_missing_context(self, interaction: discord.Interaction, action: str):
+        """Handle interactions when view lacks context due to bot restart."""
+        embed = discord.Embed(
+            title="🔄 Bot Restart Detected",
+            description=f"I can't {action} because the bot was restarted and the interaction context was lost.",
+            color=0xff9900  # Orange color for warning
+        )
+        embed.add_field(
+            name="💡 What to do:",
+            value="Please mention me again with your images or text to start a new generation session.",
+            inline=False
+        )
+        embed.set_footer(text="This happens when the bot restarts while keeping your message active.")
+        
+        try:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.errors.InteractionResponded:
+            # If response is already sent, edit the original message
+            await interaction.edit_original_response(embed=embed, view=None)
+        except Exception as e:
+            logger.warning(f"Failed to handle missing context interaction: {e}")
+    
     @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0, custom_id='style_nav_left')
     async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to previous output."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.outputs:
+            await self._handle_missing_context(interaction, "navigate between images")
+            return
+            
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -192,6 +229,11 @@ class StyleOptionsView(discord.ui.View):
     @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0, custom_id='style_nav_right')
     async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to next output."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.outputs:
+            await self._handle_missing_context(interaction, "navigate between images")
+            return
+            
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -242,6 +284,11 @@ class StyleOptionsView(discord.ui.View):
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='style_process_prompt')
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process the current generated image with a prompt."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.outputs:
+            await self._handle_missing_context(interaction, "process the image")
+            return
+            
         if not self.current_output:
             return
             
@@ -401,6 +448,11 @@ class StyleOptionsView(discord.ui.View):
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='style_edit_prompt')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit prompt for the generated image."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.outputs:
+            await self._handle_missing_context(interaction, "edit the prompt")
+            return
+            
         # Use the current output's prompt_used as the default value
         default_prompt = ""
         if self.current_output and self.current_output.prompt_used:
@@ -589,14 +641,46 @@ class ProcessRequestView(discord.ui.View):
         # Add the style select dropdown
         self.add_item(ProcessStyleSelect(self))
         
+    async def _handle_missing_context(self, interaction: discord.Interaction, action: str):
+        """Handle interactions when view lacks context due to bot restart."""
+        embed = discord.Embed(
+            title="🔄 Bot Restart Detected",
+            description=f"I can't {action} because the bot was restarted and the interaction context was lost.",
+            color=0xff9900  # Orange color for warning
+        )
+        embed.add_field(
+            name="💡 What to do:",
+            value="Please mention me again with your images or text to start a new generation session.",
+            inline=False
+        )
+        embed.set_footer(text="This happens when the bot restarts while keeping your message active.")
+        
+        try:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.errors.InteractionResponded:
+            # If response is already sent, edit the original message
+            await interaction.edit_original_response(embed=embed, view=None)
+        except Exception as e:
+            logger.warning(f"Failed to handle missing context interaction: {e}")
+        
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_request_button')
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.text_content and not self.images:
+            await self._handle_missing_context(interaction, "process your request")
+            return
+            
         await self._process_request(interaction, button)
     
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='process_edit_prompt')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit the prompt."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.text_content and not self.images:
+            await self._handle_missing_context(interaction, "edit the prompt")
+            return
+            
         modal = PromptModal(self.text_content, "Edit Prompt")
         await interaction.response.send_modal(modal)
         
