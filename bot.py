@@ -5,7 +5,7 @@ import asyncio
 import io
 import os
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
 from dataclasses import dataclass
 
 import config
@@ -18,6 +18,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Global shutdown management
+shutdown_initiated = False
+active_jobs: Set[str] = set()
+shutdown_lock = asyncio.Lock()
 
 @dataclass
 class OutputItem:
@@ -109,7 +114,9 @@ class StyleOptionsView(discord.ui.View):
     """View with style selection for chaining modifications on generated images."""
     
     def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=300):
-        super().__init__(timeout=timeout)
+        # If shutdown is initiated, disable timeout to allow jobs to complete
+        actual_timeout = None if shutdown_initiated else timeout
+        super().__init__(timeout=actual_timeout)
         self.outputs = outputs if outputs else []
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
@@ -200,56 +207,60 @@ class StyleOptionsView(discord.ui.View):
         """Process the current generated image with a prompt."""
         if not self.current_output:
             return
-            
-        # Disable all buttons to prevent multiple clicks
-        for item in self.children:
-            item.disabled = True
-            
-        # Determine images to use - use original images if current output is stitched input
-        images_to_use = [self.current_output.image]
-        if (self.current_output.filename.startswith("input_stitched_") and 
-            self.original_images and len(self.original_images) > 1):
-            # If processing a stitched input, use the original input images
-            images_to_use = self.original_images
         
-        # Update button label to show processing
-        button.label = '⏳ Processing...'
+        # Generate unique job ID and register it
+        job_id = f"prompt_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        active_jobs.add(job_id)
+        logger.info(f"Started prompt job {job_id}, active jobs: {len(active_jobs)}")
         
-        # Update embed to show processing
-        embed = discord.Embed(
-            title="🎨 Processing Request - Nano Banana Bot",
-            color=0xffaa00
-        )
-        
-        # Set description based on what we're processing
-        if self.original_text and self.original_text.strip():
-            embed.description = f"**Prompt:** {self.original_text[:100]}{'...' if len(self.original_text) > 100 else ''}"
-            embed.set_footer(text=f"Using {len(images_to_use)} input image(s) with text prompt")
-        else:
-            embed.description = "**Mode:** Transforming and enhancing images"
-            embed.set_footer(text=f"Processing {len(images_to_use)} input image(s)")
-        
-        # Add input image to embed
-        attachments = []
-        if len(images_to_use) > 1:
-            display_image = create_stitched_image(images_to_use)
-        else:
-            display_image = images_to_use[0]
-        img_buffer = io.BytesIO()
-        display_image.save(img_buffer, format='PNG')
-        img_buffer.seek(0)
-        input_filename = f"processing_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        file = discord.File(img_buffer, filename=input_filename)
-        embed.set_image(url=f"attachment://{input_filename}")
-        attachments.append(file)
-        
-        embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
-        
-        await interaction.response.edit_message(embed=embed, view=self, attachments=attachments)
-        
-        # Process the image generation
         try:
-            # Generate the image based on available inputs
+            # Disable all buttons to prevent multiple clicks
+            for item in self.children:
+                item.disabled = True
+            
+            # Determine images to use - use original images if current output is stitched input
+            images_to_use = [self.current_output.image]
+            if (self.current_output.filename.startswith("input_stitched_") and 
+                self.original_images and len(self.original_images) > 1):
+                # If processing a stitched input, use the original input images
+                images_to_use = self.original_images
+            
+            # Update button label to show processing
+            button.label = '⏳ Processing...'
+            
+            # Update embed to show processing
+            embed = discord.Embed(
+                title="🎨 Processing Request - Nano Banana Bot",
+                color=0xffaa00
+            )
+            
+            # Set description based on what we're processing
+            if self.original_text and self.original_text.strip():
+                embed.description = f"**Prompt:** {self.original_text[:100]}{'...' if len(self.original_text) > 100 else ''}"
+                embed.set_footer(text=f"Using {len(images_to_use)} input image(s) with text prompt")
+            else:
+                embed.description = "**Mode:** Transforming and enhancing images"
+                embed.set_footer(text=f"Processing {len(images_to_use)} input image(s)")
+            
+            # Add input image to embed
+            attachments = []
+            if len(images_to_use) > 1:
+                display_image = create_stitched_image(images_to_use)
+            else:
+                display_image = images_to_use[0]
+            img_buffer = io.BytesIO()
+            display_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            input_filename = f"processing_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            file = discord.File(img_buffer, filename=input_filename)
+            embed.set_image(url=f"attachment://{input_filename}")
+            attachments.append(file)
+            
+            embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
+            
+            await interaction.response.edit_message(embed=embed, view=self, attachments=attachments)
+            
+            # Process the image generation - generate the image based on available inputs
             generated_image = None
             if self.original_text and self.original_text.strip():
                 # Text + Image(s) case
@@ -353,6 +364,10 @@ class StyleOptionsView(discord.ui.View):
             )
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+        finally:
+            # Remove job from active jobs and log completion
+            active_jobs.discard(job_id)
+            logger.info(f"Completed prompt job {job_id}, remaining active jobs: {len(active_jobs)}")
     
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -418,7 +433,12 @@ class StyleOptionsView(discord.ui.View):
         """Apply selected style to the generated image."""
         if not self.current_output:
             return
-            
+        
+        # Generate unique job ID and register it
+        job_id = f"style_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        active_jobs.add(job_id)
+        logger.info(f"Started style job {job_id}, active jobs: {len(active_jobs)}")
+        
         try:
             # Disable all buttons to prevent multiple clicks
             for item in self.children:
@@ -531,6 +551,10 @@ class StyleOptionsView(discord.ui.View):
             )
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+        finally:
+            # Remove job from active jobs and log completion
+            active_jobs.discard(job_id)
+            logger.info(f"Completed style job {job_id}, remaining active jobs: {len(active_jobs)}")
     
     async def on_timeout(self):
         """Called when the view times out."""
@@ -542,7 +566,9 @@ class ProcessRequestView(discord.ui.View):
     """View with buttons to process image generation request and apply style templates."""
     
     def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=300):
-        super().__init__(timeout=timeout)
+        # If shutdown is initiated, disable timeout to allow jobs to complete
+        actual_timeout = None if shutdown_initiated else timeout
+        super().__init__(timeout=actual_timeout)
         self.text_content = text_content
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
@@ -645,6 +671,11 @@ class ProcessRequestView(discord.ui.View):
     
     async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button = None, is_template_applied: bool = False):
         """Handle the actual image processing."""
+        # Generate unique job ID and register it
+        job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        active_jobs.add(job_id)
+        logger.info(f"Started job {job_id}, active jobs: {len(active_jobs)}")
+        
         try:
             # Disable all buttons to prevent multiple clicks
             for item in self.children:
@@ -839,6 +870,10 @@ class ProcessRequestView(discord.ui.View):
             )
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+        finally:
+            # Remove job from active jobs and log completion
+            active_jobs.discard(job_id)
+            logger.info(f"Completed job {job_id}, remaining active jobs: {len(active_jobs)}")
     
     async def on_timeout(self):
         """Called when the view times out."""
@@ -866,6 +901,11 @@ async def on_ready():
     """Called when the bot is ready."""
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
+    
+    # Set bot owner for shutdown command authorization
+    app_info = await bot.application_info()
+    bot.owner_id = app_info.owner.id
+    logger.info(f'Bot owner set to: {app_info.owner.name} ({app_info.owner.id})')
 
 @bot.event
 async def on_message(message):
@@ -1044,6 +1084,13 @@ async def info_command(ctx):
               "• Powered by Google Gemini AI",
         inline=False
     )
+    embed.add_field(
+        name="⚙️ Commands",
+        value="• `!info` - Show this help message\n"
+              "• `!status` - Display bot status\n"
+              "• `!shutdown` - Gracefully shutdown bot (owner only)",
+        inline=False
+    )
     await ctx.send(embed=embed)
 
 @bot.command(name='status')
@@ -1056,7 +1103,85 @@ async def status_command(ctx):
     embed.add_field(name="Status", value="✅ Online", inline=True)
     embed.add_field(name="Guilds", value=str(len(bot.guilds)), inline=True)
     embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+    embed.add_field(name="Active Jobs", value=str(len(active_jobs)), inline=True)
+    if shutdown_initiated:
+        embed.add_field(name="Shutdown", value="🔄 Shutdown in progress", inline=True)
     await ctx.send(embed=embed)
+
+@bot.command(name='shutdown')
+async def shutdown_command(ctx):
+    """Gracefully shutdown the bot (owner only)."""
+    global shutdown_initiated
+    
+    # Check if user is bot owner
+    if ctx.author.id != bot.owner_id:
+        embed = discord.Embed(
+            title="❌ Access Denied",
+            description="Only the bot owner can use this command.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Check if shutdown is already in progress
+    if shutdown_initiated:
+        embed = discord.Embed(
+            title="🔄 Shutdown Already in Progress",
+            description=f"Waiting for {len(active_jobs)} active job(s) to complete...",
+            color=0xffaa00
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Initiate shutdown process
+    async with shutdown_lock:
+        shutdown_initiated = True
+        logger.info("Graceful shutdown initiated by bot owner")
+        
+        # Send initial shutdown message
+        embed = discord.Embed(
+            title="🔄 Initiating Graceful Shutdown",
+            description="Bot shutdown has been initiated. Waiting for all active jobs to complete...",
+            color=0xffaa00
+        )
+        embed.add_field(name="Active Jobs", value=str(len(active_jobs)), inline=True)
+        embed.add_field(name="Status", value="⏳ Waiting for completion", inline=True)
+        
+        shutdown_msg = await ctx.send(embed=embed)
+        
+        # Wait for all active jobs to complete
+        while active_jobs:
+            await asyncio.sleep(1)
+            logger.info(f"Waiting for {len(active_jobs)} jobs to complete: {list(active_jobs)}")
+            
+            # Update status message every 5 seconds
+            if len(active_jobs) > 0:
+                embed.set_field_at(0, name="Active Jobs", value=str(len(active_jobs)), inline=True)
+                try:
+                    await shutdown_msg.edit(embed=embed)
+                except:
+                    pass  # Ignore edit errors during shutdown
+        
+        # All jobs completed, send final message
+        embed = discord.Embed(
+            title="✅ Shutdown Complete",
+            description="All active jobs have completed. Bot is shutting down now.",
+            color=0x00ff00
+        )
+        embed.add_field(name="Status", value="🔄 Closing bot connection...", inline=False)
+        
+        try:
+            await shutdown_msg.edit(embed=embed)
+        except:
+            pass  # Ignore edit errors during shutdown
+            
+        logger.info("All jobs completed. Shutting down bot...")
+        
+        # Give a moment for the message to be sent
+        await asyncio.sleep(2)
+        
+        # Close the bot gracefully
+        await bot.close()
 
 def main():
     """Main function to run the bot."""
@@ -1069,7 +1194,14 @@ def main():
         return
     
     logger.info("Starting Nano Banana Discord Bot...")
-    bot.run(config.DISCORD_TOKEN)
+    try:
+        bot.run(config.DISCORD_TOKEN)
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user interrupt (Ctrl+C)")
+    except Exception as e:
+        logger.error(f"Bot stopped due to error: {e}")
+    finally:
+        logger.info("Bot shutdown complete")
 
 if __name__ == "__main__":
     main()
