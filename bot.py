@@ -183,6 +183,10 @@ class StyleOptionsView(discord.ui.View):
     @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0, custom_id='style_nav_left')
     async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to previous output."""
+        if not self.outputs:
+            # Handle persistent view with no context
+            await self._update_display(interaction)
+            return
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -192,6 +196,10 @@ class StyleOptionsView(discord.ui.View):
     @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0, custom_id='style_nav_right')
     async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to next output."""
+        if not self.outputs:
+            # Handle persistent view with no context
+            await self._update_display(interaction)
+            return
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -201,6 +209,27 @@ class StyleOptionsView(discord.ui.View):
     async def _update_display(self, interaction: discord.Interaction):
         """Update the display with the current output."""
         if not self.outputs:
+            # Handle case where persistent view has no context after restart
+            embed = discord.Embed(
+                title="⚠️ Interaction Expired - Nano Banana Bot",
+                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
+                color=0xff9900
+            )
+            embed.add_field(
+                name="What happened?", 
+                value="Button interactions on messages sent before a bot restart cannot access the original image data.", 
+                inline=False
+            )
+            embed.add_field(
+                name="How to fix this?", 
+                value="Simply mention the bot again with your prompt to start a new generation.", 
+                inline=False
+            )
+            
+            try:
+                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+            except discord.InteractionResponse:
+                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
             return
             
         current_output = self.outputs[self.current_index]
@@ -243,6 +272,8 @@ class StyleOptionsView(discord.ui.View):
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process the current generated image with a prompt."""
         if not self.current_output:
+            # Handle persistent view with no context - show helpful error
+            await self._update_display(interaction)
             return
             
         # Disable all buttons to prevent multiple clicks
@@ -401,6 +432,11 @@ class StyleOptionsView(discord.ui.View):
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='style_edit_prompt')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit prompt for the generated image."""
+        if not self.current_output:
+            # Handle persistent view with no context - show helpful error
+            await self._update_display(interaction)
+            return
+            
         # Use the current output's prompt_used as the default value
         default_prompt = ""
         if self.current_output and self.current_output.prompt_used:
@@ -461,6 +497,8 @@ class StyleOptionsView(discord.ui.View):
     async def apply_style(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style to the generated image."""
         if not self.current_output:
+            # Handle persistent view with no context - show helpful error
+            await self._update_display(interaction)
             return
             
         try:
@@ -592,11 +630,59 @@ class ProcessRequestView(discord.ui.View):
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_request_button')
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
+        # Check if this is a persistent view with no context
+        if not self.text_content and not self.images:
+            embed = discord.Embed(
+                title="⚠️ Interaction Expired - Nano Banana Bot",
+                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
+                color=0xff9900
+            )
+            embed.add_field(
+                name="What happened?", 
+                value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
+                inline=False
+            )
+            embed.add_field(
+                name="How to fix this?", 
+                value="Simply mention the bot again with your prompt to start a new generation.", 
+                inline=False
+            )
+            
+            try:
+                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+            except discord.InteractionResponse:
+                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+            return
+            
         await self._process_request(interaction, button)
     
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='process_edit_prompt')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit the prompt."""
+        # Check if this is a persistent view with no context
+        if not self.text_content and not self.images:
+            embed = discord.Embed(
+                title="⚠️ Interaction Expired - Nano Banana Bot",
+                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
+                color=0xff9900
+            )
+            embed.add_field(
+                name="What happened?", 
+                value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
+                inline=False
+            )
+            embed.add_field(
+                name="How to fix this?", 
+                value="Simply mention the bot again with your prompt to start a new generation.", 
+                inline=False
+            )
+            
+            try:
+                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+            except discord.InteractionResponse:
+                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+            return
+            
         modal = PromptModal(self.text_content, "Edit Prompt")
         await interaction.response.send_modal(modal)
         
@@ -635,6 +721,30 @@ class ProcessRequestView(discord.ui.View):
     
     async def apply_style_and_process(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style template and process."""
+        # Check if this is a persistent view with no context
+        if not self.text_content and not self.images:
+            embed = discord.Embed(
+                title="⚠️ Interaction Expired - Nano Banana Bot",
+                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
+                color=0xff9900
+            )
+            embed.add_field(
+                name="What happened?", 
+                value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
+                inline=False
+            )
+            embed.add_field(
+                name="How to fix this?", 
+                value="Simply mention the bot again with your prompt to start a new generation.", 
+                inline=False
+            )
+            
+            try:
+                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+            except discord.InteractionResponse:
+                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+            return
+            
         # Apply the selected template
         self._apply_template(style_key)
         
