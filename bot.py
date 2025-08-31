@@ -1393,8 +1393,8 @@ async def handle_generation_request(message):
         
         logger.info(f"Processing request with text: '{text_content}'")
         
-        # Extract images from attachments
-        images = []
+        # Extract images from attachments (current message only, not reply)
+        current_message_images = []
         if message.attachments:
             await status_msg.edit(content="📥 Downloading images...")
             for attachment in message.attachments[:config.MAX_IMAGES]:
@@ -1402,10 +1402,13 @@ async def handle_generation_request(message):
                     if attachment.size <= config.MAX_IMAGE_SIZE:
                         image = await download_image(attachment.url)
                         if image:
-                            images.append(image)
+                            current_message_images.append(image)
                             logger.info(f"Downloaded image: {attachment.filename}")
                     else:
                         logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
+        
+        # Start with current message images
+        images = current_message_images.copy()
         
         # Extract data from referenced message if this is a reply
         referenced_text = ""
@@ -1490,13 +1493,12 @@ async def handle_generation_request(message):
         
         # Apply the 16 condition logic
         current_has_text = bool(text_content.strip())
-        current_has_images = bool(len(images) > 0)  # Images from current message attachments
+        current_has_images = bool(len(current_message_images) > 0)  # Images from current message only
         is_reply = bool(message.reference and message.reference.message_id)
         reply_has_text = bool(referenced_text.strip())
         reply_has_images = referenced_has_images
         
         # Extract images from referenced message for processing
-        reply_images = []
         if is_reply and reply_has_images:
             # Images were already extracted above into the images list
             pass
@@ -1519,11 +1521,11 @@ async def handle_generation_request(message):
                     logger.info("Case 6-7: Reply with no content, reply has images - showing initial embed")
             elif current_has_text and not current_has_images:
                 # Cases 8-10: Reply with just text
-                if reply_has_text:
+                if reply_has_text and not reply_has_images:
                     # Case 8: combine text with "and"
                     final_text_content = f"{referenced_text} and {text_content}"
                     should_auto_process = True
-                    logger.info("Case 8: Reply with text, reply has text - combining and auto-processing")
+                    logger.info("Case 8: Reply with text, reply has text only - combining and auto-processing")
                 else:
                     # Cases 9-10: process current text with reply images
                     final_text_content = text_content
