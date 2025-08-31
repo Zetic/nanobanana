@@ -376,25 +376,36 @@ class StyleOptionsView(discord.ui.View):
     async def _process_add_image(self, interaction: discord.Interaction, message):
         """Process the uploaded image and create a new stitched step."""
         try:
-            # Download the new image
-            attachment = message.attachments[0]  # Take the first image
-            if attachment.size > config.MAX_IMAGE_SIZE:
-                await interaction.followup.send(
-                    f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
-                    ephemeral=True
-                )
+            # Download all new images
+            new_images = []
+            for attachment in message.attachments:
+                if attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+                    if attachment.size > config.MAX_IMAGE_SIZE:
+                        await interaction.followup.send(
+                            f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
+                            ephemeral=True
+                        )
+                        return
+                    
+                    new_image = await download_image(attachment.url)
+                    if not new_image:
+                        await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                        return
+                    new_images.append(new_image)
+            
+            if not new_images:
+                await interaction.followup.send("❌ **No valid images found** - Please try again.", ephemeral=True)
                 return
             
-            new_image = await download_image(attachment.url)
-            if not new_image:
-                await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
-                return
+            # Update current prompt if text is included with the image
+            if message.content.strip():
+                self.original_text = message.content.strip()
             
             # Determine source images for the current output
             source_images = self._get_source_images_for_current_output()
             
-            # Add the new image to the source images
-            all_images = source_images + [new_image]
+            # Add all new images to the source images
+            all_images = source_images + new_images
             
             # Create new stitched step (preview for display, not saved to disk)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -407,7 +418,7 @@ class StyleOptionsView(discord.ui.View):
             new_output = OutputItem(
                 image=stitched_image,
                 filename=filename,
-                prompt_used=f"Combined from {len(source_images)} original image(s) + 1 added image",
+                prompt_used=f"Combined from {len(source_images)} original image(s) + {len(new_images)} added image(s)",
                 timestamp=timestamp
             )
             
@@ -415,7 +426,7 @@ class StyleOptionsView(discord.ui.View):
             self.outputs.append(new_output)
             self.current_index = len(self.outputs) - 1
             
-            # Update original_images to include the new image
+            # Update original_images to include the new images
             self.original_images = all_images
             
             # Update the display to show the new output
@@ -427,12 +438,14 @@ class StyleOptionsView(discord.ui.View):
             except:
                 pass  # Ignore if we can't delete
             
-            # Send success message
-            await interaction.followup.send(
-                f"✅ **Image added successfully!** Created new step {len(self.outputs)}/{len(self.outputs)} "
-                f"combining {len(source_images)} original image(s) with your added image.",
-                ephemeral=True
-            )
+            # Clean up instruction message if it exists
+            try:
+                if hasattr(self, '_instruction_message') and self._instruction_message:
+                    await self._instruction_message.delete()
+            except:
+                pass  # Ignore if we can't delete
+            
+            # No confirmation message - per requirements
             
         except Exception as e:
             logger.error(f"Error processing added image: {e}")
@@ -567,23 +580,27 @@ class StyleOptionsView(discord.ui.View):
         # Defer the interaction to keep it bound to the original message
         await interaction.response.defer()
         
-        # Send instructions to user for uploading an image
-        await interaction.followup.send(
-            "📎 **Add Image for Combined Processing**\n\n"
-            "Please upload an image in your next message to add it to the current images. "
-            "This will show you a preview of the combined images and allow processing them together.\n\n"
-            "*Note: Send only one image attachment in your next message.*", 
+        # Store the instruction message reference for later cleanup
+        self._instruction_message = await interaction.followup.send(
+            "📎 Upload image(s) in your next message.", 
             ephemeral=True
         )
         
         # Set up a temporary listener for the next message from this user
         def check(message):
+            # Accept messages with images, optionally with text
+            has_images = (message.attachments and
+                         any(attachment.filename.lower().endswith(ext) 
+                             for attachment in message.attachments 
+                             for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+            
+            # If no images but has text, ignore it while waiting for images
+            if not has_images and message.content.strip():
+                return False
+                
             return (message.author.id == interaction.user.id and 
                    message.channel.id == interaction.channel.id and
-                   message.attachments and
-                   any(attachment.filename.lower().endswith(ext) 
-                       for attachment in message.attachments 
-                       for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+                   has_images)
         
         try:
             # Wait for user to send a message with an image attachment
@@ -593,6 +610,13 @@ class StyleOptionsView(discord.ui.View):
             await self._process_add_image(interaction, message)
             
         except asyncio.TimeoutError:
+            # Clean up instruction message if it exists
+            try:
+                if hasattr(self, '_instruction_message') and self._instruction_message:
+                    await self._instruction_message.delete()
+            except:
+                pass  # Ignore if we can't delete
+            
             # Send timeout message
             await interaction.followup.send(
                 "⏰ **Timeout** - No image was received within 60 seconds. Please try again.", 
@@ -887,23 +911,27 @@ class ProcessRequestView(discord.ui.View):
         # Defer the interaction to keep it bound to the original message
         await interaction.response.defer()
         
-        # Send instructions to user for uploading an image
-        await interaction.followup.send(
-            "📎 **Add Image to Request**\n\n"
-            "Please upload an image in your next message to add it to the current request. "
-            "This will convert your text-to-image request into a text + image request.\n\n"
-            "*Note: Send only one image attachment in your next message.*", 
+        # Store the instruction message reference for later cleanup
+        self._instruction_message = await interaction.followup.send(
+            "📎 Upload image(s) in your next message.", 
             ephemeral=True
         )
         
         # Set up a temporary listener for the next message from this user
         def check(message):
+            # Accept messages with images, optionally with text
+            has_images = (message.attachments and
+                         any(attachment.filename.lower().endswith(ext) 
+                             for attachment in message.attachments 
+                             for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+            
+            # If no images but has text, ignore it while waiting for images
+            if not has_images and message.content.strip():
+                return False
+                
             return (message.author.id == interaction.user.id and 
                    message.channel.id == interaction.channel.id and
-                   message.attachments and
-                   any(attachment.filename.lower().endswith(ext) 
-                       for attachment in message.attachments 
-                       for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+                   has_images)
         
         try:
             # Wait for user to send a message with an image attachment
@@ -913,6 +941,13 @@ class ProcessRequestView(discord.ui.View):
             await self._process_add_image_to_request(interaction, message)
             
         except asyncio.TimeoutError:
+            # Clean up instruction message if it exists
+            try:
+                if hasattr(self, '_instruction_message') and self._instruction_message:
+                    await self._instruction_message.delete()
+            except:
+                pass  # Ignore if we can't delete
+            
             # Send timeout message
             await interaction.followup.send(
                 "⏰ **Timeout** - No image was received within 60 seconds. Please try again.", 
@@ -922,22 +957,34 @@ class ProcessRequestView(discord.ui.View):
     async def _process_add_image_to_request(self, interaction: discord.Interaction, message):
         """Process the uploaded image and add it to the current request."""
         try:
-            # Download the new image
-            attachment = message.attachments[0]  # Take the first image
-            if attachment.size > config.MAX_IMAGE_SIZE:
-                await interaction.followup.send(
-                    f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
-                    ephemeral=True
-                )
+            # Download all new images
+            new_images = []
+            for attachment in message.attachments:
+                if attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+                    if attachment.size > config.MAX_IMAGE_SIZE:
+                        await interaction.followup.send(
+                            f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
+                            ephemeral=True
+                        )
+                        return
+                    
+                    new_image = await download_image(attachment.url)
+                    if not new_image:
+                        await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                        return
+                    new_images.append(new_image)
+            
+            if not new_images:
+                await interaction.followup.send("❌ **No valid images found** - Please try again.", ephemeral=True)
                 return
             
-            new_image = await download_image(attachment.url)
-            if not new_image:
-                await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
-                return
+            # Update current prompt if text is included with the image
+            if message.content.strip():
+                self.text_content = message.content.strip()
+                self.original_text = message.content.strip()
             
-            # Add the image to the request
-            self.images.append(new_image)
+            # Add all new images to the request
+            self.images.extend(new_images)
             
             # Update the display to show the new request configuration
             await self._update_request_display_after_add(interaction)
@@ -948,11 +995,14 @@ class ProcessRequestView(discord.ui.View):
             except:
                 pass  # Ignore if we can't delete
             
-            # Send success message
-            await interaction.followup.send(
-                f"✅ **Image added successfully!** Your request now includes {len(self.images)} image(s).",
-                ephemeral=True
-            )
+            # Clean up instruction message if it exists
+            try:
+                if hasattr(self, '_instruction_message') and self._instruction_message:
+                    await self._instruction_message.delete()
+            except:
+                pass  # Ignore if we can't delete
+            
+            # No confirmation message - per requirements
             
         except Exception as e:
             logger.error(f"Error adding image to request: {e}")
