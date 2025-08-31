@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import config
 from image_utils import download_image, create_stitched_image
 from genai_client import ImageGenerator
+from job_manager import job_manager, Job
 
 # Set up logging
 logging.basicConfig(
@@ -108,17 +109,27 @@ class StyleSelect(discord.ui.Select):
 class StyleOptionsView(discord.ui.View):
     """View with style selection for chaining modifications on generated images."""
     
-    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=300):
-        super().__init__(timeout=timeout)
+    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, job_id: str = None):
+        super().__init__(timeout=None)  # Never timeout for persistent jobs
         self.outputs = outputs if outputs else []
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
         self.original_images = original_images or []
+        self.job_id = job_id
         
         # Add the style select dropdown
         self.add_item(StyleSelect(self))
         
         self._update_button_states()
+        
+        # Update job status if we have a job_id
+        if self.job_id:
+            job_manager.update_job(
+                self.job_id,
+                current_view_type="StyleOptionsView",
+                current_output_index=self.current_index,
+                status="completed"
+            )
     
     def _update_button_states(self):
         """Update button states based on number of outputs."""
@@ -144,6 +155,10 @@ class StyleOptionsView(discord.ui.View):
             return
         self.current_index = (self.current_index - 1) % len(self.outputs)
         await self._update_display(interaction)
+        
+        # Update job with new index
+        if self.job_id:
+            job_manager.update_job(self.job_id, current_output_index=self.current_index)
     
     @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
     async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -153,6 +168,10 @@ class StyleOptionsView(discord.ui.View):
             return
         self.current_index = (self.current_index + 1) % len(self.outputs)
         await self._update_display(interaction)
+        
+        # Update job with new index
+        if self.job_id:
+            job_manager.update_job(self.job_id, current_output_index=self.current_index)
     
     async def _update_display(self, interaction: discord.Interaction):
         """Update the display with the current output."""
@@ -275,6 +294,10 @@ class StyleOptionsView(discord.ui.View):
                 filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
                 generated_image.save(filepath)
                 
+                # Also save to job if we have a job_id
+                if self.job_id:
+                    job_manager.add_output_image(self.job_id, generated_image, filename)
+                
                 # Create new output item
                 new_output = OutputItem(
                     image=generated_image,
@@ -316,7 +339,7 @@ class StyleOptionsView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.original_images)
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.original_images, self.job_id)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
@@ -466,6 +489,10 @@ class StyleOptionsView(discord.ui.View):
                 styled_filepath = os.path.join(config.GENERATED_IMAGES_DIR, styled_filename)
                 styled_image.save(styled_filepath)
                 
+                # Also save to job if we have a job_id
+                if self.job_id:
+                    job_manager.add_output_image(self.job_id, styled_image, styled_filename)
+                
                 # Create new output item for the styled image
                 styled_output = OutputItem(
                     image=styled_image,
@@ -501,7 +528,7 @@ class StyleOptionsView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create new style options view for further chaining
-                new_style_view = StyleOptionsView(new_outputs, len(new_outputs) - 1, self.original_text, self.original_images)
+                new_style_view = StyleOptionsView(new_outputs, len(new_outputs) - 1, self.original_text, self.original_images, self.job_id)
                 
                 # Send the styled result
                 styled_file = discord.File(img_buffer, filename=styled_filename)
@@ -532,24 +559,34 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
     
-    async def on_timeout(self):
-        """Called when the view times out."""
-        # Disable all buttons when timeout occurs
-        for item in self.children:
-            item.disabled = True
+    # Note: timeout=None so on_timeout will not be called
+    # async def on_timeout(self):
+    #     """Called when the view times out."""
+    #     # Disable all buttons when timeout occurs
+    #     for item in self.children:
+    #         item.disabled = True
 
 class ProcessRequestView(discord.ui.View):
     """View with buttons to process image generation request and apply style templates."""
     
-    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=300):
-        super().__init__(timeout=timeout)
+    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, job_id: str = None):
+        super().__init__(timeout=None)  # Never timeout for persistent jobs
         self.text_content = text_content
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
         self.existing_outputs = existing_outputs or []
+        self.job_id = job_id
         
         # Add the style select dropdown
         self.add_item(ProcessStyleSelect(self))
+        
+        # Update job status if we have a job_id
+        if self.job_id:
+            job_manager.update_job(
+                self.job_id,
+                current_view_type="ProcessRequestView",
+                status="waiting"
+            )
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -749,6 +786,10 @@ class ProcessRequestView(discord.ui.View):
                 filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
                 generated_image.save(filepath)
                 
+                # Also save to job if we have a job_id
+                if self.job_id:
+                    job_manager.add_output_image(self.job_id, generated_image, filename)
+                
                 # Create new output item
                 new_output = OutputItem(
                     image=generated_image,
@@ -800,7 +841,7 @@ class ProcessRequestView(discord.ui.View):
                     if not original_images_for_view:
                         original_images_for_view = self.images
                 
-                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view)
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view, self.job_id)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
@@ -840,11 +881,12 @@ class ProcessRequestView(discord.ui.View):
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
     
-    async def on_timeout(self):
-        """Called when the view times out."""
-        # Disable all buttons when timeout occurs
-        for item in self.children:
-            item.disabled = True
+    # Note: timeout=None so on_timeout will not be called
+    # async def on_timeout(self):
+    #     """Called when the view times out."""
+    #     # Disable all buttons when timeout occurs
+    #     for item in self.children:
+    #         item.disabled = True
 
 # Bot setup
 intents = discord.Intents.default()
@@ -862,10 +904,77 @@ def get_image_generator():
     return image_generator
 
 @bot.event
+@bot.event
 async def on_ready():
     """Called when the bot is ready."""
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
+    
+    # Load and restore existing jobs
+    await restore_existing_jobs()
+
+async def restore_existing_jobs():
+    """Restore existing jobs from persistent storage."""
+    try:
+        jobs = job_manager.get_all_jobs()
+        if not jobs:
+            logger.info("No existing jobs to restore")
+            return
+        
+        logger.info(f"Found {len(jobs)} existing jobs to restore")
+        
+        for job_id, job in jobs.items():
+            try:
+                # Try to get the channel and message
+                channel = bot.get_channel(job.channel_id)
+                if not channel:
+                    logger.warning(f"Could not find channel {job.channel_id} for job {job_id}")
+                    continue
+                
+                try:
+                    message = await channel.fetch_message(job.message_id)
+                except discord.NotFound:
+                    logger.warning(f"Message {job.message_id} no longer exists for job {job_id}")
+                    # Clean up the job since the message is gone
+                    job_manager.cleanup_job(job_id)
+                    continue
+                
+                # Check if message still has view/components
+                if not message.components:
+                    logger.info(f"Message {job.message_id} has no components, job {job_id} may be completed")
+                    continue
+                
+                # Reconstruct the view based on job state
+                if job.current_view_type == "ProcessRequestView":
+                    # Load input images from job
+                    input_images = []
+                    for img_path in job.input_image_paths:
+                        if os.path.exists(img_path):
+                            from PIL import Image
+                            input_images.append(Image.open(img_path))
+                    
+                    # Create the view 
+                    view = ProcessRequestView(
+                        text_content=job.original_text,
+                        images=input_images,
+                        existing_outputs=[],  # TODO: Reconstruct outputs if needed
+                        job_id=job_id
+                    )
+                    
+                    # Re-attach the view to the message
+                    bot.add_view(view, message_id=job.message_id)
+                    logger.info(f"Restored ProcessRequestView for job {job_id}")
+                    
+                elif job.current_view_type == "StyleOptionsView":
+                    # For StyleOptionsView, we'd need to reconstruct outputs
+                    # This is more complex, so for now we'll just log
+                    logger.info(f"StyleOptionsView restoration not yet implemented for job {job_id}")
+                
+            except Exception as e:
+                logger.error(f"Error restoring job {job_id}: {e}")
+                
+    except Exception as e:
+        logger.error(f"Error restoring existing jobs: {e}")
 
 @bot.event
 async def on_message(message):
@@ -915,6 +1024,16 @@ async def handle_generation_request(message):
             await message.add_reaction('❌')
             return
         
+        # Create a persistent job for this request
+        job_id = job_manager.create_job(
+            message_id=status_msg.id,  # Use the status message ID as the message to track
+            channel_id=message.channel.id,
+            guild_id=message.guild.id if message.guild else None,
+            original_text=text_content,
+            input_images=images
+        )
+        logger.info(f"Created job {job_id} for message {status_msg.id}")
+        
         # Delete the original message after processing inputs
         try:
             await message.delete()
@@ -930,9 +1049,14 @@ async def handle_generation_request(message):
                 # For multiple images, create single stitched OutputItem for display
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 stitched_image = create_stitched_image(images)
+                
+                # Save stitched image to job
+                stitched_filename = f"input_stitched_{timestamp}.png"
+                job_manager.set_stitched_image(job_id, stitched_image, stitched_filename)
+                
                 stitched_output = OutputItem(
                     image=stitched_image,
-                    filename=f"input_stitched_{timestamp}.png",
+                    filename=stitched_filename,
                     prompt_used=f"Stitched input from {len(images)} images",
                     timestamp=timestamp
                 )
@@ -1000,7 +1124,7 @@ async def handle_generation_request(message):
         embed.set_footer(text="Click the button below to process your request")
         
         # Create the view with the process button, passing input_outputs as existing outputs
-        view = ProcessRequestView(text_content, images, existing_outputs=input_outputs)
+        view = ProcessRequestView(text_content, images, existing_outputs=input_outputs, job_id=job_id)
         
         # Update the status message with the embed and button
         await status_msg.edit(content=None, embed=embed, view=view, attachments=attachments)

@@ -17,5 +17,10 @@ MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8MB max per image
 MAX_IMAGES = 10  # Maximum number of images to process
 GENERATED_IMAGES_DIR = 'generated_images'
 
+# Job persistence configuration
+JOBS_FILE = 'jobs.json'
+JOBS_DIR = 'jobs'
+
 # Ensure directories exist
 os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)
+os.makedirs(JOBS_DIR, exist_ok=True)
