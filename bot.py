@@ -1302,11 +1302,20 @@ async def on_message(message):
     # This excludes:
     # - Replies without mentions: "use this image" (reply to bot's message without @)
     # - Regular messages without mentions: "hello"
-    if bot.user in message.mentions:
-        logger.info(f"Processing message from {message.author.id} (mentioned bot)")
+    
+    # Check if bot is mentioned AND the mention is explicit in the message content
+    bot_mentioned_explicitly = (
+        bot.user in message.mentions and 
+        (f'<@{bot.user.id}>' in message.content or f'<@!{bot.user.id}>' in message.content)
+    )
+    
+    if bot_mentioned_explicitly:
+        logger.info(f"Processing message from {message.author.id} (explicitly mentioned bot)")
         await handle_generation_request(message)
     else:
-        logger.debug(f"Ignoring message from {message.author.id} (no bot mention)")
+        if bot.user in message.mentions:
+            logger.warning(f"Bot in mentions list but not explicitly mentioned in content. Message: '{message.content}' | Mentions: {[f'<@{u.id}>' for u in message.mentions]}")
+        logger.debug(f"Ignoring message from {message.author.id} (no explicit bot mention)")
     
     # Process commands
     await bot.process_commands(message)
@@ -1359,15 +1368,16 @@ async def handle_generation_request(message):
                     await status_msg.edit(content="📥 Downloading images from reply...")
                     logger.info(f"Processing {len(referenced_message.attachments)} attachments from referenced message")
                     for attachment in referenced_message.attachments[:config.MAX_IMAGES - len(images)]:
-                        logger.debug(f"Processing attachment: {attachment.filename} ({attachment.size} bytes)")
+                        logger.info(f"Processing attachment: {attachment.filename} ({attachment.size} bytes) - URL: {attachment.url}")
                         if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                             if attachment.size <= config.MAX_IMAGE_SIZE:
+                                logger.info(f"Attempting to download image: {attachment.filename}")
                                 image = await download_image(attachment.url)
                                 if image:
                                     images.append(image)
-                                    logger.info(f"Downloaded image from reply: {attachment.filename}")
+                                    logger.info(f"Successfully downloaded and added image from reply: {attachment.filename}")
                                 else:
-                                    logger.warning(f"Failed to download image from reply: {attachment.filename}")
+                                    logger.error(f"Failed to download image from reply: {attachment.filename}")
                             else:
                                 logger.warning(f"Image too large in reply: {attachment.filename} ({attachment.size} bytes)")
                         else:
@@ -1375,9 +1385,32 @@ async def handle_generation_request(message):
                         
                         # Stop if we've reached the maximum number of images
                         if len(images) >= config.MAX_IMAGES:
+                            logger.info(f"Reached maximum image limit ({config.MAX_IMAGES}), stopping")
                             break
                 else:
-                    logger.info(f"Referenced message has no attachments to extract")
+                    if referenced_message.author == bot.user:
+                        logger.warning(f"Bot message has no attachments! This might indicate the bot's images aren't being saved as attachments")
+                        logger.info(f"Bot message content: '{referenced_message.content[:100]}...'")
+                        logger.info(f"Bot message embeds: {len(referenced_message.embeds)}")
+                        if referenced_message.embeds:
+                            for i, embed in enumerate(referenced_message.embeds):
+                                logger.info(f"Embed {i}: title='{embed.title}', image_url='{embed.image.url if embed.image else 'None'}'")
+                                
+                                # Try to extract image from embed
+                                if embed.image and embed.image.url:
+                                    if len(images) < config.MAX_IMAGES:
+                                        logger.info(f"Attempting to download image from embed: {embed.image.url}")
+                                        await status_msg.edit(content="📥 Downloading image from embed...")
+                                        image = await download_image(embed.image.url)
+                                        if image:
+                                            images.append(image)
+                                            logger.info(f"Successfully downloaded and added image from bot's embed")
+                                        else:
+                                            logger.error(f"Failed to download image from bot's embed: {embed.image.url}")
+                                    else:
+                                        logger.info(f"Reached maximum image limit, skipping embed image")
+                    else:
+                        logger.info(f"Referenced user message has no attachments to extract")
                             
             except Exception as e:
                 logger.warning(f"Could not fetch referenced message: {e}")
