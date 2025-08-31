@@ -64,12 +64,16 @@ class ProcessStyleSelect(discord.ui.Select):
                 value=style_key
             ))
         
+        # Create a stable custom_id based on job_id if available
+        custom_id = f"process_style_select_{request_view.job_id}" if request_view.job_id else "process_style_select"
+        
         super().__init__(
             placeholder="Choose a style to apply...",
             min_values=1,
             max_values=1,
             options=options,
-            row=1  # Place in second row below main buttons
+            row=1,  # Place in second row below main buttons
+            custom_id=custom_id
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -93,12 +97,16 @@ class StyleSelect(discord.ui.Select):
                 value=style_key
             ))
         
+        # Create a stable custom_id based on job_id if available
+        custom_id = f"style_select_{style_view.job_id}" if style_view.job_id else "style_select"
+        
         super().__init__(
             placeholder="Choose a style to apply...",
             min_values=1,
             max_values=1,
             options=options,
-            row=1  # Place in second row below navigation buttons
+            row=1,  # Place in second row below navigation buttons
+            custom_id=custom_id
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -147,7 +155,7 @@ class StyleOptionsView(discord.ui.View):
             return self.outputs[self.current_index]
         return None
     
-    @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0, custom_id='nav_left_button')
     async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to previous output."""
         if len(self.outputs) <= 1:
@@ -160,7 +168,7 @@ class StyleOptionsView(discord.ui.View):
         if self.job_id:
             job_manager.update_job(self.job_id, current_output_index=self.current_index)
     
-    @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0, custom_id='nav_right_button')
     async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to next output."""
         if len(self.outputs) <= 1:
@@ -214,7 +222,7 @@ class StyleOptionsView(discord.ui.View):
         
         await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
         
-    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
+    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_prompt_button')
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process the current generated image with a prompt."""
         if not self.current_output:
@@ -377,7 +385,7 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
     
-    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='edit_prompt_button_style')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit prompt for the generated image."""
         # Use the current output's prompt_used as the default value
@@ -588,12 +596,12 @@ class ProcessRequestView(discord.ui.View):
                 status="waiting"
             )
         
-    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
+    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_button')
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
         await self._process_request(interaction, button)
     
-    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='edit_prompt_button_process')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit the prompt."""
         modal = PromptModal(self.text_content, "Edit Prompt")
