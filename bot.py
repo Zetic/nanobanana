@@ -26,6 +26,11 @@ from dataclasses import dataclass
 import config
 from image_utils import download_image, create_stitched_image
 from genai_client import ImageGenerator
+from persistence import (
+    get_persistence_manager, 
+    PersistedInteractionState, 
+    PersistedOutputItem
+)
 
 # Set up logging
 logging.basicConfig(
@@ -68,6 +73,44 @@ class OutputItem:
     filename: str
     prompt_used: str  # The prompt that generated this output
     timestamp: str
+    interaction_id: str = ""  # ID for persistence
+    
+    def to_persisted(self, persistence_manager) -> PersistedOutputItem:
+        """Convert to persisted format by copying image to persistence directory."""
+        # Get current image path (assume it's in generated_images_dir)
+        current_path = os.path.join(config.GENERATED_IMAGES_DIR, self.filename)
+        
+        # Copy to persistence directory with interaction ID
+        persisted_path = persistence_manager.save_output_image_with_id(current_path, self.interaction_id)
+        
+        return PersistedOutputItem(
+            image_path=persisted_path,
+            filename=self.filename,
+            prompt_used=self.prompt_used,
+            timestamp=self.timestamp
+        )
+    
+    @classmethod
+    def from_persisted(cls, persisted: PersistedOutputItem, persistence_manager, interaction_id: str):
+        """Create OutputItem from persisted format by loading image."""
+        from PIL import Image
+        
+        # Load image from persistence directory
+        abs_path = persistence_manager.get_absolute_path(persisted.image_path)
+        if os.path.exists(abs_path):
+            image = Image.open(abs_path)
+        else:
+            logger.warning(f"Persisted image not found: {abs_path}")
+            # Create a placeholder image if original is missing
+            image = Image.new('RGB', (512, 512), 'gray')
+        
+        return cls(
+            image=image,
+            filename=persisted.filename,
+            prompt_used=persisted.prompt_used,
+            timestamp=persisted.timestamp,
+            interaction_id=interaction_id
+        )
 
 class PromptModal(discord.ui.Modal):
     """Modal for editing the prompt text."""
@@ -152,17 +195,101 @@ class StyleSelect(discord.ui.Select):
 class StyleOptionsView(discord.ui.View):
     """View with style selection for chaining modifications on generated images."""
     
-    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=None):
+    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=None, interaction_id: str = None):
         super().__init__(timeout=timeout)
         self.outputs = outputs if outputs else []
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
         self.original_text = original_text
         self.original_images = original_images or []
+        self.interaction_id = interaction_id or get_persistence_manager().generate_interaction_id()
+        
+        # Ensure all outputs have the same interaction_id
+        for output in self.outputs:
+            if not output.interaction_id:
+                output.interaction_id = self.interaction_id
         
         # Add the style select dropdown
         self.add_item(StyleSelect(self))
         
         self._update_button_states()
+        
+        # Save initial state to persistence
+        self._save_state()
+    
+    def _save_state(self):
+        """Save current view state to persistence."""
+        try:
+            persistence_manager = get_persistence_manager()
+            
+            # Convert outputs to persisted format
+            persisted_outputs = []
+            for output in self.outputs:
+                persisted_outputs.append(output.to_persisted(persistence_manager))
+            
+            # Save input images if not already saved
+            original_image_paths = []
+            if hasattr(self, '_original_image_paths'):
+                original_image_paths = self._original_image_paths
+            
+            state = PersistedInteractionState(
+                interaction_id=self.interaction_id,
+                interaction_type="style_view",
+                created_at=datetime.now().isoformat(),
+                original_text=self.original_text,
+                original_image_paths=original_image_paths,
+                outputs=persisted_outputs,
+                current_index=self.current_index
+            )
+            
+            persistence_manager.save_interaction_state(state)
+            logger.info(f"Saved StyleOptionsView state: {self.interaction_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save StyleOptionsView state: {e}")
+    
+    @classmethod
+    def from_interaction_id(cls, interaction_id: str):
+        """Restore StyleOptionsView from saved state."""
+        try:
+            persistence_manager = get_persistence_manager()
+            state = persistence_manager.load_interaction_state(interaction_id)
+            
+            if not state or state.interaction_type != "style_view":
+                logger.warning(f"No style view state found for ID: {interaction_id}")
+                return None
+            
+            # Restore outputs from persisted format
+            outputs = []
+            for persisted_output in state.outputs:
+                output = OutputItem.from_persisted(persisted_output, persistence_manager, interaction_id)
+                outputs.append(output)
+            
+            # Load original images
+            original_images = []
+            for img_path in state.original_image_paths:
+                abs_path = persistence_manager.get_absolute_path(img_path)
+                if os.path.exists(abs_path):
+                    from PIL import Image
+                    original_images.append(Image.open(abs_path))
+            
+            # Create view with restored state
+            view = cls(
+                outputs=outputs,
+                current_index=state.current_index,
+                original_text=state.original_text,
+                original_images=original_images,
+                interaction_id=interaction_id
+            )
+            
+            # Store the original image paths for future saves
+            view._original_image_paths = state.original_image_paths
+            
+            logger.info(f"Restored StyleOptionsView from state: {interaction_id}")
+            return view
+            
+        except Exception as e:
+            logger.error(f"Failed to restore StyleOptionsView from {interaction_id}: {e}")
+            return None
     
     def _update_button_states(self):
         """Update button states based on number of outputs."""
@@ -184,9 +311,25 @@ class StyleOptionsView(discord.ui.View):
     async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to previous output."""
         if not self.outputs:
-            # Handle persistent view with no context
-            await self._update_display(interaction)
-            return
+            # Try to restore state from persistence using interaction message context
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.outputs = restored_view.outputs
+                self.current_index = restored_view.current_index
+                self.original_text = restored_view.original_text
+                self.original_images = restored_view.original_images
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with navigation
+                if len(self.outputs) > 1:
+                    self.current_index = (self.current_index - 1) % len(self.outputs)
+                await self._update_display(interaction)
+                return
+            else:
+                # Show persistence failure message
+                await self._show_persistence_failure(interaction)
+                return
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -197,39 +340,79 @@ class StyleOptionsView(discord.ui.View):
     async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to next output."""
         if not self.outputs:
-            # Handle persistent view with no context
-            await self._update_display(interaction)
-            return
+            # Try to restore state from persistence using interaction message context
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.outputs = restored_view.outputs
+                self.current_index = restored_view.current_index
+                self.original_text = restored_view.original_text
+                self.original_images = restored_view.original_images
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with navigation
+                if len(self.outputs) > 1:
+                    self.current_index = (self.current_index + 1) % len(self.outputs)
+                await self._update_display(interaction)
+                return
+            else:
+                # Show persistence failure message
+                await self._show_persistence_failure(interaction)
+                return
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
         self.current_index = (self.current_index + 1) % len(self.outputs)
         await self._update_display(interaction)
     
+    async def _try_restore_from_persistence(self, interaction: discord.Interaction):
+        """Try to restore view state from interaction context."""
+        try:
+            # Try to extract interaction ID from embed or message content
+            if hasattr(interaction, 'message') and interaction.message and interaction.message.embeds:
+                embed = interaction.message.embeds[0]
+                # Look for interaction ID in embed footer or custom field
+                if embed.footer and 'ID:' in embed.footer.text:
+                    interaction_id = embed.footer.text.split('ID:')[1].strip()
+                    return self.from_interaction_id(interaction_id)
+                    
+                # Try to find ID in embed fields
+                for field in embed.fields:
+                    if 'Interaction ID' in field.name and field.value:
+                        return self.from_interaction_id(field.value.strip())
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error trying to restore from persistence: {e}")
+            return None
+    
+    async def _show_persistence_failure(self, interaction: discord.Interaction):
+        """Show message when persistence restoration fails."""
+        embed = discord.Embed(
+            title="⚠️ Interaction Expired - Nano Banana Bot",
+            description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
+            color=0xff9900
+        )
+        embed.add_field(
+            name="What happened?", 
+            value="Button interactions on messages sent before a bot restart cannot access the original image data.", 
+            inline=False
+        )
+        embed.add_field(
+            name="How to fix this?", 
+            value="Simply mention the bot again with your prompt to start a new generation.", 
+            inline=False
+        )
+        
+        try:
+            await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+        except discord.InteractionResponse:
+            await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+    
     async def _update_display(self, interaction: discord.Interaction):
         """Update the display with the current output."""
         if not self.outputs:
-            # Handle case where persistent view has no context after restart
-            embed = discord.Embed(
-                title="⚠️ Interaction Expired - Nano Banana Bot",
-                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
-                color=0xff9900
-            )
-            embed.add_field(
-                name="What happened?", 
-                value="Button interactions on messages sent before a bot restart cannot access the original image data.", 
-                inline=False
-            )
-            embed.add_field(
-                name="How to fix this?", 
-                value="Simply mention the bot again with your prompt to start a new generation.", 
-                inline=False
-            )
-            
-            try:
-                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-            except discord.InteractionResponse:
-                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+            await self._show_persistence_failure(interaction)
             return
             
         current_output = self.outputs[self.current_index]
@@ -257,6 +440,9 @@ class StyleOptionsView(discord.ui.View):
         
         embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
         
+        # Add interaction ID to footer for persistence
+        embed.set_footer(text=f"Persistent Session ID: {self.interaction_id}")
+        
         # Save current image to buffer for Discord
         img_buffer = io.BytesIO()
         current_output.image.save(img_buffer, format='PNG')
@@ -266,15 +452,32 @@ class StyleOptionsView(discord.ui.View):
         file = discord.File(img_buffer, filename=current_output.filename)
         embed.set_image(url=f"attachment://{current_output.filename}")
         
+        # Save current state
+        self._save_state()
+        
         await safe_interaction_response(interaction, embed=embed, view=self, attachments=[file])
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='style_process_prompt')
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process the current generated image with a prompt."""
         if not self.current_output:
-            # Handle persistent view with no context - show helpful error
-            await self._update_display(interaction)
-            return
+            # Try to restore state from persistence
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.outputs = restored_view.outputs
+                self.current_index = restored_view.current_index
+                self.original_text = restored_view.original_text
+                self.original_images = restored_view.original_images
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with processing if we now have outputs
+                if not self.current_output:
+                    await self._show_persistence_failure(interaction)
+                    return
+            else:
+                await self._show_persistence_failure(interaction)
+                return
             
         # Disable all buttons to prevent multiple clicks
         for item in self.children:
@@ -355,7 +558,8 @@ class StyleOptionsView(discord.ui.View):
                     image=generated_image,
                     filename=filename,
                     prompt_used=self.original_text.strip() or "Image transformation",
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    interaction_id=self.interaction_id
                 )
                 
                 # Add to existing outputs to create history
@@ -391,7 +595,7 @@ class StyleOptionsView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.original_images)
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.original_images, interaction_id=self.interaction_id)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
@@ -553,7 +757,8 @@ class StyleOptionsView(discord.ui.View):
                     image=styled_image,
                     filename=styled_filename,
                     prompt_used=f"{style_name} style: {style_prompt}",
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    interaction_id=self.interaction_id
                 )
                 
                 # Add to outputs history
@@ -583,7 +788,7 @@ class StyleOptionsView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create new style options view for further chaining
-                new_style_view = StyleOptionsView(new_outputs, len(new_outputs) - 1, self.original_text, self.original_images)
+                new_style_view = StyleOptionsView(new_outputs, len(new_outputs) - 1, self.original_text, self.original_images, interaction_id=self.interaction_id)
                 
                 # Send the styled result
                 styled_file = discord.File(img_buffer, filename=styled_filename)
@@ -617,42 +822,170 @@ class StyleOptionsView(discord.ui.View):
 class ProcessRequestView(discord.ui.View):
     """View with buttons to process image generation request and apply style templates."""
     
-    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=None):
+    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=None, interaction_id: str = None):
         super().__init__(timeout=timeout)
         self.text_content = text_content
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
         self.existing_outputs = existing_outputs or []
+        self.interaction_id = interaction_id or get_persistence_manager().generate_interaction_id()
         
         # Add the style select dropdown
         self.add_item(ProcessStyleSelect(self))
+        
+        # Save initial state to persistence
+        self._save_state()
+    
+    def _save_state(self):
+        """Save current view state to persistence."""
+        try:
+            persistence_manager = get_persistence_manager()
+            
+            # Save input images if provided
+            original_image_paths = []
+            if self.images and not hasattr(self, '_original_image_paths'):
+                for i, image in enumerate(self.images):
+                    # Convert PIL Image to bytes
+                    img_buffer = io.BytesIO()
+                    image.save(img_buffer, format='PNG')
+                    img_data = img_buffer.getvalue()
+                    
+                    # Save and store path
+                    img_path = persistence_manager.save_input_image(img_data, self.interaction_id, i)
+                    original_image_paths.append(img_path)
+                
+                self._original_image_paths = original_image_paths
+            elif hasattr(self, '_original_image_paths'):
+                original_image_paths = self._original_image_paths
+            
+            # Convert existing outputs to persisted format
+            persisted_outputs = []
+            for output in self.existing_outputs:
+                if not output.interaction_id:
+                    output.interaction_id = self.interaction_id
+                persisted_outputs.append(output.to_persisted(persistence_manager))
+            
+            state = PersistedInteractionState(
+                interaction_id=self.interaction_id,
+                interaction_type="process_view",
+                created_at=datetime.now().isoformat(),
+                original_text=self.text_content,
+                original_image_paths=original_image_paths,
+                outputs=persisted_outputs,
+                current_index=0
+            )
+            
+            persistence_manager.save_interaction_state(state)
+            logger.info(f"Saved ProcessRequestView state: {self.interaction_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save ProcessRequestView state: {e}")
+    
+    @classmethod
+    def from_interaction_id(cls, interaction_id: str):
+        """Restore ProcessRequestView from saved state."""
+        try:
+            persistence_manager = get_persistence_manager()
+            state = persistence_manager.load_interaction_state(interaction_id)
+            
+            if not state or state.interaction_type != "process_view":
+                logger.warning(f"No process view state found for ID: {interaction_id}")
+                return None
+            
+            # Load original images
+            images = []
+            for img_path in state.original_image_paths:
+                abs_path = persistence_manager.get_absolute_path(img_path)
+                if os.path.exists(abs_path):
+                    from PIL import Image
+                    images.append(Image.open(abs_path))
+            
+            # Restore existing outputs from persisted format
+            existing_outputs = []
+            for persisted_output in state.outputs:
+                output = OutputItem.from_persisted(persisted_output, persistence_manager, interaction_id)
+                existing_outputs.append(output)
+            
+            # Create view with restored state
+            view = cls(
+                text_content=state.original_text,
+                images=images,
+                existing_outputs=existing_outputs,
+                interaction_id=interaction_id
+            )
+            
+            # Store the original image paths for future saves
+            view._original_image_paths = state.original_image_paths
+            
+            logger.info(f"Restored ProcessRequestView from state: {interaction_id}")
+            return view
+            
+        except Exception as e:
+            logger.error(f"Failed to restore ProcessRequestView from {interaction_id}: {e}")
+            return None
+    
+    async def _try_restore_from_persistence(self, interaction: discord.Interaction):
+        """Try to restore view state from interaction context."""
+        try:
+            # Try to extract interaction ID from embed or message content
+            if hasattr(interaction, 'message') and interaction.message and interaction.message.embeds:
+                embed = interaction.message.embeds[0]
+                # Look for interaction ID in embed footer or custom field
+                if embed.footer and 'ID:' in embed.footer.text:
+                    interaction_id = embed.footer.text.split('ID:')[1].strip()
+                    return self.from_interaction_id(interaction_id)
+                    
+                # Try to find ID in embed fields
+                for field in embed.fields:
+                    if 'Interaction ID' in field.name and field.value:
+                        return self.from_interaction_id(field.value.strip())
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error trying to restore from persistence: {e}")
+            return None
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_request_button')
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
         # Check if this is a persistent view with no context
         if not self.text_content and not self.images:
-            embed = discord.Embed(
-                title="⚠️ Interaction Expired - Nano Banana Bot",
-                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
-                color=0xff9900
-            )
-            embed.add_field(
-                name="What happened?", 
-                value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
-                inline=False
-            )
-            embed.add_field(
-                name="How to fix this?", 
-                value="Simply mention the bot again with your prompt to start a new generation.", 
-                inline=False
-            )
-            
-            try:
-                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-            except discord.InteractionResponse:
-                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
-            return
+            # Try to restore state from persistence
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.text_content = restored_view.text_content
+                self.images = restored_view.images
+                self.original_text = restored_view.original_text
+                self.existing_outputs = restored_view.existing_outputs
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with processing
+                await self._process_request(interaction, button)
+                return
+            else:
+                # Show persistence failure message
+                embed = discord.Embed(
+                    title="⚠️ Interaction Expired - Nano Banana Bot",
+                    description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
+                    color=0xff9900
+                )
+                embed.add_field(
+                    name="What happened?", 
+                    value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
+                    inline=False
+                )
+                embed.add_field(
+                    name="How to fix this?", 
+                    value="Simply mention the bot again with your prompt to start a new generation.", 
+                    inline=False
+                )
+                
+                try:
+                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                except discord.InteractionResponse:
+                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                return
             
         await self._process_request(interaction, button)
     
@@ -661,27 +994,40 @@ class ProcessRequestView(discord.ui.View):
         """Show modal to edit the prompt."""
         # Check if this is a persistent view with no context
         if not self.text_content and not self.images:
-            embed = discord.Embed(
-                title="⚠️ Interaction Expired - Nano Banana Bot",
-                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
-                color=0xff9900
-            )
-            embed.add_field(
-                name="What happened?", 
-                value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
-                inline=False
-            )
-            embed.add_field(
-                name="How to fix this?", 
-                value="Simply mention the bot again with your prompt to start a new generation.", 
-                inline=False
-            )
-            
-            try:
-                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-            except discord.InteractionResponse:
-                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
-            return
+            # Try to restore state from persistence
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.text_content = restored_view.text_content
+                self.images = restored_view.images
+                self.original_text = restored_view.original_text
+                self.existing_outputs = restored_view.existing_outputs
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with edit prompt
+            else:
+                # Show persistence failure message
+                embed = discord.Embed(
+                    title="⚠️ Interaction Expired - Nano Banana Bot",
+                    description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
+                    color=0xff9900
+                )
+                embed.add_field(
+                    name="What happened?", 
+                    value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
+                    inline=False
+                )
+                embed.add_field(
+                    name="How to fix this?", 
+                    value="Simply mention the bot again with your prompt to start a new generation.", 
+                    inline=False
+                )
+                
+                try:
+                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                except discord.InteractionResponse:
+                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                return
             
         modal = PromptModal(self.text_content, "Edit Prompt")
         await interaction.response.send_modal(modal)
@@ -714,7 +1060,10 @@ class ProcessRequestView(discord.ui.View):
                 embed.add_field(name="Generation Type", value="🖼️ Image-only transformation", inline=True)
                 
             embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
-            embed.set_footer(text="Click the button below to process your request")
+            embed.set_footer(text=f"Persistent Session ID: {self.interaction_id}")
+            
+            # Save updated state
+            self._save_state()
             
             await interaction.edit_original_response(embed=embed, view=self, attachments=[])
     
@@ -723,27 +1072,40 @@ class ProcessRequestView(discord.ui.View):
         """Apply selected style template and process."""
         # Check if this is a persistent view with no context
         if not self.text_content and not self.images:
-            embed = discord.Embed(
-                title="⚠️ Interaction Expired - Nano Banana Bot",
-                description="This interaction is no longer available because the bot was restarted.\n\nPlease create a new image generation request to continue.",
-                color=0xff9900
-            )
-            embed.add_field(
-                name="What happened?", 
-                value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
-                inline=False
-            )
-            embed.add_field(
-                name="How to fix this?", 
-                value="Simply mention the bot again with your prompt to start a new generation.", 
-                inline=False
-            )
-            
-            try:
-                await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-            except discord.InteractionResponse:
-                await interaction.edit_original_response(embed=embed, view=None, attachments=[])
-            return
+            # Try to restore state from persistence
+            restored_view = await self._try_restore_from_persistence(interaction)
+            if restored_view:
+                # Update this view with restored data
+                self.text_content = restored_view.text_content
+                self.images = restored_view.images
+                self.original_text = restored_view.original_text
+                self.existing_outputs = restored_view.existing_outputs
+                self.interaction_id = restored_view.interaction_id
+                self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
+                # Continue with style application
+            else:
+                # Show persistence failure message
+                embed = discord.Embed(
+                    title="⚠️ Interaction Expired - Nano Banana Bot",
+                    description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
+                    color=0xff9900
+                )
+                embed.add_field(
+                    name="What happened?", 
+                    value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
+                    inline=False
+                )
+                embed.add_field(
+                    name="How to fix this?", 
+                    value="Simply mention the bot again with your prompt to start a new generation.", 
+                    inline=False
+                )
+                
+                try:
+                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                except discord.InteractionResponse:
+                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                return
             
         # Apply the selected template
         self._apply_template(style_key)
@@ -902,7 +1264,8 @@ class ProcessRequestView(discord.ui.View):
                     image=generated_image,
                     filename=filename,
                     prompt_used=self.text_content.strip() or "Image transformation",
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    interaction_id=self.interaction_id
                 )
                 
                 # Add to existing outputs to create history (input images first, then generated)
@@ -948,7 +1311,7 @@ class ProcessRequestView(discord.ui.View):
                     if not original_images_for_view:
                         original_images_for_view = self.images
                 
-                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view)
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view, interaction_id=self.interaction_id)
                 
                 # Send the result as a file attachment with the embed and style options
                 file = discord.File(img_buffer, filename=filename)
@@ -1040,6 +1403,9 @@ async def on_message(message):
 async def handle_generation_request(message):
     """Handle image generation request when bot is mentioned."""
     try:
+        # Generate unique interaction ID for this request
+        interaction_id = get_persistence_manager().generate_interaction_id()
+        
         # Send initial response
         await message.add_reaction('🎨')
         status_msg = await message.reply("📥 Preparing your request...")
@@ -1049,7 +1415,7 @@ async def handle_generation_request(message):
         for mention in message.mentions:
             text_content = text_content.replace(f'<@{mention.id}>', '').strip()
         
-        logger.info(f"Processing request with text: '{text_content}'")
+        logger.info(f"Processing request with text: '{text_content}' (ID: {interaction_id})")
         
         # Extract images from attachments
         images = []
@@ -1090,7 +1456,8 @@ async def handle_generation_request(message):
                     image=stitched_image,
                     filename=f"input_stitched_{timestamp}.png",
                     prompt_used=f"Stitched input from {len(images)} images",
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    interaction_id=interaction_id
                 )
                 input_outputs.append(stitched_output)
                 logger.info(f"Created single stitched output for {len(images)} input images")
@@ -1101,7 +1468,8 @@ async def handle_generation_request(message):
                     image=images[0],
                     filename=f"input_0_{timestamp}.png",
                     prompt_used="Input image",
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    interaction_id=interaction_id
                 )
                 input_outputs.append(input_output)
                 logger.info(f"Created single input output for single image")
@@ -1153,10 +1521,10 @@ async def handle_generation_request(message):
             attachments.append(file)
             
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
-        embed.set_footer(text="Click the button below to process your request")
+        embed.set_footer(text=f"Persistent Session ID: {interaction_id}")
         
         # Create the view with the process button, passing input_outputs as existing outputs
-        view = ProcessRequestView(text_content, images, existing_outputs=input_outputs)
+        view = ProcessRequestView(text_content, images, existing_outputs=input_outputs, interaction_id=interaction_id)
         
         # Update the status message with the embed and button
         await status_msg.edit(content=None, embed=embed, view=view, attachments=attachments)

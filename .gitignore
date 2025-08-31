@@ -46,3 +46,9 @@ input_images/
 
 # Test files
 test_prompt_modal.py
+test_persistence.py
+test_persistence_unit.py
+test_bot_restart.py
+
+# Bot persistence data
+bot_data/
