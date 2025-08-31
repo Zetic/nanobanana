@@ -192,7 +192,7 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100] if current_prompt else 'No prompt'}{'...' if len(current_prompt) > 100 else ''}", inline=False)
         
         if len(self.outputs) > 1:
-            embed.add_field(name="Output", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
+            embed.add_field(name="Step", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
         
         embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
         
@@ -314,7 +314,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Show output count if we have multiple
                 if len(all_outputs) > 1:
-                    embed.add_field(name="Output", value=f"{len(all_outputs)} of {len(all_outputs)}", inline=True)
+                    embed.add_field(name="Step", value=f"{len(all_outputs)} of {len(all_outputs)}", inline=True)
                 
                 embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
                 
@@ -373,7 +373,7 @@ class StyleOptionsView(discord.ui.View):
     
     
     async def _process_add_image(self, interaction: discord.Interaction, message):
-        """Process the uploaded image and create a new stitched output."""
+        """Process the uploaded image and create a new stitched step."""
         try:
             # Download the new image
             attachment = message.attachments[0]  # Take the first image
@@ -395,16 +395,14 @@ class StyleOptionsView(discord.ui.View):
             # Add the new image to the source images
             all_images = source_images + [new_image]
             
-            # Create new stitched output (this is a real output, not ephemeral)
+            # Create new stitched step (preview for display, not saved to disk)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             stitched_image = create_stitched_image(all_images)
             
-            # Save the stitched image to disk (this is what "Add Image" should do)
+            # Create new output item (stitched preview for steps, not saved to disk)
             filename = f"stitched_{timestamp}.png"
-            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-            stitched_image.save(filepath)
             
-            # Create new output item (real stitched output)
+            # Create new output item (stitched step for display)
             new_output = OutputItem(
                 image=stitched_image,
                 filename=filename,
@@ -430,7 +428,7 @@ class StyleOptionsView(discord.ui.View):
             
             # Send success message
             await interaction.followup.send(
-                f"✅ **Image added successfully!** Created new stitched output {len(self.outputs)}/{len(self.outputs)} "
+                f"✅ **Image added successfully!** Created new step {len(self.outputs)}/{len(self.outputs)} "
                 f"combining {len(source_images)} original image(s) with your added image.",
                 ephemeral=True
             )
@@ -483,7 +481,7 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100] if current_prompt else 'No prompt'}{'...' if len(current_prompt) > 100 else ''}", inline=False)
         
         if len(self.outputs) > 1:
-            embed.add_field(name="Output", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
+            embed.add_field(name="Step", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
         
         embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
         
@@ -547,7 +545,7 @@ class StyleOptionsView(discord.ui.View):
                 embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100] if current_prompt else 'No prompt'}{'...' if len(current_prompt) > 100 else ''}", inline=False)
             
             if len(self.outputs) > 1:
-                embed.add_field(name="Output", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
+                embed.add_field(name="Step", value=f"{self.current_index + 1} of {len(self.outputs)}", inline=True)
             
             embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
             
@@ -677,7 +675,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Show output count if we have multiple
                 if len(new_outputs) > 1:
-                    embed.add_field(name="Output", value=f"{len(new_outputs)} of {len(new_outputs)}", inline=True)
+                    embed.add_field(name="Step", value=f"{len(new_outputs)} of {len(new_outputs)}", inline=True)
                 
                 embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
                 
@@ -744,13 +742,15 @@ class StyleOptionsView(discord.ui.View):
         
         try:
             # Create files and embeds for all outputs (up to Discord's limit)
+            # Filter out stitched images, only show true outputs
+            true_outputs = [output for output in self.outputs if not output.filename.startswith("stitched_")]
             files = []
             embeds = []
             
             # Discord has a limit of 10 embeds per message
-            max_embeds = min(10, len(self.outputs))
+            max_embeds = min(10, len(true_outputs))
             
-            for i, output in enumerate(self.outputs[:max_embeds]):
+            for i, output in enumerate(true_outputs[:max_embeds]):
                 # Create file for this output
                 img_buffer = io.BytesIO()
                 output.image.save(img_buffer, format='PNG')
@@ -763,7 +763,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create embed for this output
                 embed = discord.Embed(
-                    title=f"🕒 Final Output {i + 1}/{len(self.outputs)} (Timed Out)",
+                    title=f"🕒 Final Output {i + 1}/{len(true_outputs)} (Timed Out)",
                     color=0xff9900
                 )
                 
@@ -783,8 +783,8 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Add footer for the first embed
                 if i == 0:
-                    if len(self.outputs) > max_embeds:
-                        embed.set_footer(text=f"Session timed out. Showing {max_embeds} of {len(self.outputs)} outputs.")
+                    if len(true_outputs) > max_embeds:
+                        embed.set_footer(text=f"Session timed out. Showing {max_embeds} of {len(true_outputs)} outputs.")
                     else:
                         embed.set_footer(text="Session timed out. Here are all your outputs.")
                 
@@ -802,9 +802,9 @@ class StyleOptionsView(discord.ui.View):
             
             # Update the original message with all outputs
             content = "🕒 **Timed out!** Here are all your output images:"
-            if len(self.outputs) > max_embeds:
-                content += f"\n*Showing {max_embeds} of {len(self.outputs)} outputs due to Discord limits.*"
-            elif not self.outputs:
+            if len(true_outputs) > max_embeds:
+                content += f"\n*Showing {max_embeds} of {len(true_outputs)} outputs due to Discord limits.*"
+            elif not true_outputs:
                 content = "🕒 **Timed out!** No images were generated during this session."
             
             await self.message.edit(
@@ -1178,7 +1178,7 @@ class ProcessRequestView(discord.ui.View):
                 
                 # Show output count if we have multiple
                 if len(all_outputs) > 1:
-                    embed.add_field(name="Output", value=f"{len(all_outputs)} of {len(all_outputs)}", inline=True)
+                    embed.add_field(name="Step", value=f"{len(all_outputs)} of {len(all_outputs)}", inline=True)
                 
                 embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
                 
