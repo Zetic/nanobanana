@@ -1,3 +1,18 @@
+"""
+Nano Banana Discord Bot - Main Bot Implementation
+
+This bot uses persistent Discord UI Views to prevent timeout issues:
+- All View classes use timeout=None to prevent automatic timeouts
+- All interactive components (buttons, selects) have custom_id for persistence
+- Views are registered on bot startup to handle interactions after restarts
+- Safe interaction response handling prevents token expiry issues
+
+Architecture:
+- StyleOptionsView: Handles generated image interactions (navigation, style application)
+- ProcessRequestView: Handles initial request processing and prompt editing
+- Both views use persistent custom_ids that survive bot restarts
+"""
+
 import discord
 from discord.ext import commands
 import logging
@@ -18,6 +33,33 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+async def safe_interaction_response(interaction: discord.Interaction, **kwargs):
+    """Safely respond to an interaction, handling token expiry by falling back to message editing."""
+    try:
+        if interaction.response.is_done():
+            # Response already sent, edit the original response
+            await interaction.edit_original_response(**kwargs)
+        else:
+            # First response, edit the message
+            await interaction.response.edit_message(**kwargs)
+    except discord.NotFound:
+        # Interaction token expired, try to edit the message directly if we have it
+        if hasattr(interaction, 'message') and interaction.message:
+            try:
+                await interaction.message.edit(**kwargs)
+            except Exception as e:
+                logger.warning(f"Failed to edit message after token expiry: {e}")
+    except discord.HTTPException as e:
+        if e.code == 10062:  # Unknown interaction
+            # Token expired, try direct message edit
+            if hasattr(interaction, 'message') and interaction.message:
+                try:
+                    await interaction.message.edit(**kwargs)
+                except Exception as e2:
+                    logger.warning(f"Failed to edit message after token expiry: {e2}")
+        else:
+            raise
 
 @dataclass
 class OutputItem:
@@ -195,7 +237,7 @@ class StyleOptionsView(discord.ui.View):
         file = discord.File(img_buffer, filename=current_output.filename)
         embed.set_image(url=f"attachment://{current_output.filename}")
         
-        await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
+        await safe_interaction_response(interaction, embed=embed, view=self, attachments=[file])
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='style_process_prompt')
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -858,11 +900,14 @@ async def on_ready():
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
     
     # Register persistent views for handling interactions after restarts
+    # This enables the bot to handle button/select interactions on messages
+    # sent before a restart, preventing "This interaction failed" errors
     # Create empty view instances for persistent interaction handling
     persistent_style_view = StyleOptionsView([], 0, "", [])
     persistent_process_view = ProcessRequestView("", [])
     
     # Add views to the bot so they can handle interactions after restarts
+    # Views with custom_id can be reconstructed and will route to these handlers
     bot.add_view(persistent_style_view)
     bot.add_view(persistent_process_view)
     
