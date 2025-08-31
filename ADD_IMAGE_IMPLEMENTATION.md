@@ -1,16 +1,16 @@
-# Add Image Button Implementation Summary
+# Add Image Button Implementation Summary - UPDATED
 
 ## Changes Made
 
-### 1. StyleOptionsView - Add Image Button
+### 1. StyleOptionsView - Add Image Button **[UPDATED FOR STITCHED IMAGE FIX]**
 **Location**: `bot.py` lines 375-522
-**Purpose**: Allow users to add images to existing outputs to create new combined outputs
+**Purpose**: Allow users to add images for combined processing without creating stitched outputs
 **Features**:
 - **Button**: "📎 Add Image" button added to StyleOptionsView
-- **User Flow**: Click button → Instructions sent → User uploads image → New output created
+- **User Flow**: Click button → Instructions sent → User uploads image → Preview updated with combined images
 - **Smart Source Detection**: Uses original input images, never stitched images as inputs
-- **New Output Creation**: Creates new stitched output combining source images + new image
-- **Display Update**: Updates view to show new output at end of cycle
+- **Ephemeral Display**: Shows combined preview without creating persistent stitched outputs
+- **Original Image Tracking**: Updates original_images list for proper processing
 - **Error Handling**: Validates image size, handles download failures
 
 ### 2. ProcessRequestView - Add Image Button  

@@ -217,11 +217,10 @@ class StyleOptionsView(discord.ui.View):
         for item in self.children:
             item.disabled = True
             
-        # Determine images to use - use original images if current output is stitched input
+        # Determine images to use - use original images if we have them  
         images_to_use = [self.current_output.image]
-        if (self.current_output.filename.startswith("input_stitched_") and 
-            self.original_images and len(self.original_images) > 1):
-            # If processing a stitched input, use the original input images
+        if self.original_images and len(self.original_images) > 1:
+            # If we have multiple original images, use those instead of the current single output
             images_to_use = self.original_images
         
         # Update button label to show processing
@@ -396,26 +395,29 @@ class StyleOptionsView(discord.ui.View):
             # Add the new image to the source images
             all_images = source_images + [new_image]
             
-            # Create new stitched output
+            # Create new stitched output (this is a real output, not ephemeral)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             stitched_image = create_stitched_image(all_images)
             
-            # Save the stitched image
+            # Save the stitched image to disk (this is what "Add Image" should do)
             filename = f"stitched_{timestamp}.png"
             filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
             stitched_image.save(filepath)
             
-            # Create new output item
+            # Create new output item (real stitched output)
             new_output = OutputItem(
                 image=stitched_image,
                 filename=filename,
-                prompt_used=f"Stitched from {len(source_images)} original image(s) + 1 added image",
+                prompt_used=f"Combined from {len(source_images)} original image(s) + 1 added image",
                 timestamp=timestamp
             )
             
             # Add to outputs and update current index to the new output
             self.outputs.append(new_output)
             self.current_index = len(self.outputs) - 1
+            
+            # Update original_images to include the new image
+            self.original_images = all_images
             
             # Update the display to show the new output
             await self._update_display_after_add(interaction)
@@ -428,7 +430,7 @@ class StyleOptionsView(discord.ui.View):
             
             # Send success message
             await interaction.followup.send(
-                f"✅ **Image added successfully!** Created new output {len(self.outputs)}/{len(self.outputs)} "
+                f"✅ **Image added successfully!** Created new stitched output {len(self.outputs)}/{len(self.outputs)} "
                 f"combining {len(source_images)} original image(s) with your added image.",
                 ephemeral=True
             )
@@ -438,7 +440,7 @@ class StyleOptionsView(discord.ui.View):
             await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
     
     def _get_source_images_for_current_output(self):
-        """Get the source images for the current output, avoiding stitched images as inputs."""
+        """Get the source images for the current output."""
         if not self.current_output:
             return []
             
@@ -452,7 +454,7 @@ class StyleOptionsView(discord.ui.View):
         if self.original_images:
             return self.original_images.copy()
         
-        # Fallback: use the current output image (though this is not ideal per requirements)
+        # Fallback: use the current output image
         return [current_output.image]
     
     async def _update_display_after_add(self, interaction: discord.Interaction):
@@ -498,6 +500,8 @@ class StyleOptionsView(discord.ui.View):
         self._update_button_states()
         
         await interaction.edit_original_response(embed=embed, view=self, attachments=[file])
+
+
 
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -560,15 +564,15 @@ class StyleOptionsView(discord.ui.View):
         
     @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
     async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Add an image to the current output by creating a new stitched output."""
+        """Add an image to the current output for combined processing."""
         # Defer the interaction to keep it bound to the original message
         await interaction.response.defer()
         
         # Send instructions to user for uploading an image
         await interaction.followup.send(
-            "📎 **Add Image to Output**\n\n"
-            "Please upload an image in your next message to add it to the current output. "
-            "The bot will create a new output that combines the source images with your new image.\n\n"
+            "📎 **Add Image for Combined Processing**\n\n"
+            "Please upload an image in your next message to add it to the current images. "
+            "This will show you a preview of the combined images and allow processing them together.\n\n"
             "*Note: Send only one image attachment in your next message.*", 
             ephemeral=True
         )
@@ -1192,13 +1196,8 @@ class ProcessRequestView(discord.ui.View):
                 img_buffer.seek(0)
                 
                 # Create style options view for chaining modifications
-                # Pass original images from existing outputs if available
+                # Use the original images from the request
                 original_images_for_view = self.images
-                if self.existing_outputs:
-                    # Extract original PIL images from input OutputItems for the view
-                    original_images_for_view = [output.image for output in self.existing_outputs if "input_" in output.filename]
-                    if not original_images_for_view:
-                        original_images_for_view = self.images
                 
                 style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, original_images_for_view)
                 
@@ -1326,32 +1325,8 @@ async def handle_generation_request(message):
             logger.warning(f"Could not delete original message: {e}")
             # Continue processing even if deletion fails
         
-        # Convert input images to OutputItems for cycling interface
+        # Don't create any OutputItems for initial uploads - show images directly in embed
         input_outputs = []
-        if images:
-            if len(images) > 1:
-                # For multiple images, create single stitched OutputItem for display
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                stitched_image = create_stitched_image(images)
-                stitched_output = OutputItem(
-                    image=stitched_image,
-                    filename=f"input_stitched_{timestamp}.png",
-                    prompt_used=f"Stitched input from {len(images)} images",
-                    timestamp=timestamp
-                )
-                input_outputs.append(stitched_output)
-                logger.info(f"Created single stitched output for {len(images)} input images")
-            else:
-                # For single image, keep existing behavior
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                input_output = OutputItem(
-                    image=images[0],
-                    filename=f"input_0_{timestamp}.png",
-                    prompt_used="Input image",
-                    timestamp=timestamp
-                )
-                input_outputs.append(input_output)
-                logger.info(f"Created single input output for single image")
         
         # Create preview embed with the request details
         embed = discord.Embed(
@@ -1368,7 +1343,7 @@ async def handle_generation_request(message):
             # Use stitched image for display when multiple images, single image otherwise
             if len(images) > 1:
                 display_image = create_stitched_image(images)
-                embed.add_field(name="Preview", value="📋 Combined preview (for display only)", inline=True)
+                embed.add_field(name="Preview", value="📋 Stitched preview", inline=True)
             else:
                 display_image = images[0]
             img_buffer = io.BytesIO()
@@ -1388,7 +1363,7 @@ async def handle_generation_request(message):
             # Use stitched image for display when multiple images, single image otherwise
             if len(images) > 1:
                 display_image = create_stitched_image(images)
-                embed.add_field(name="Preview", value="📋 Combined preview (for display only)", inline=True)
+                embed.add_field(name="Preview", value="📋 Stitched preview", inline=True)
             else:
                 display_image = images[0]
             img_buffer = io.BytesIO()
@@ -1402,8 +1377,8 @@ async def handle_generation_request(message):
         embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
         embed.set_footer(text="Click the button below to process your request")
         
-        # Create the view with the process button, passing input_outputs as existing outputs
-        view = ProcessRequestView(text_content, images, existing_outputs=input_outputs)
+        # Create the view with the process button (no existing outputs since we don't create OutputItems for initial uploads)
+        view = ProcessRequestView(text_content, images, existing_outputs=[])
         
         # Update the status message with the embed and button
         await status_msg.edit(content=None, embed=embed, view=view, attachments=attachments)
