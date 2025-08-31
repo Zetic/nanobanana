@@ -372,40 +372,6 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
     
-    @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
-    async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Add an image to the current output by creating a new stitched output."""
-        # Send instructions to user for uploading an image
-        await interaction.response.send_message(
-            "📎 **Add Image to Output**\n\n"
-            "Please upload an image in your next message to add it to the current output. "
-            "The bot will create a new output that combines the source images with your new image.\n\n"
-            "*Note: Send only one image attachment in your next message.*", 
-            ephemeral=True
-        )
-        
-        # Set up a temporary listener for the next message from this user
-        def check(message):
-            return (message.author.id == interaction.user.id and 
-                   message.channel.id == interaction.channel.id and
-                   message.attachments and
-                   any(attachment.filename.lower().endswith(ext) 
-                       for attachment in message.attachments 
-                       for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
-        
-        try:
-            # Wait for user to send a message with an image attachment
-            message = await interaction.client.wait_for('message', check=check, timeout=60.0)
-            
-            # Process the attached image
-            await self._process_add_image(interaction, message)
-            
-        except asyncio.TimeoutError:
-            # Send timeout message
-            await interaction.followup.send(
-                "⏰ **Timeout** - No image was received within 60 seconds. Please try again.", 
-                ephemeral=True
-            )
     
     async def _process_add_image(self, interaction: discord.Interaction, message):
         """Process the uploaded image and create a new stitched output."""
@@ -592,6 +558,43 @@ class StyleOptionsView(discord.ui.View):
             
             await interaction.edit_original_response(embed=embed, view=self, attachments=[file])
         
+    @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
+    async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Add an image to the current output by creating a new stitched output."""
+        # Defer the interaction to keep it bound to the original message
+        await interaction.response.defer()
+        
+        # Send instructions to user for uploading an image
+        await interaction.followup.send(
+            "📎 **Add Image to Output**\n\n"
+            "Please upload an image in your next message to add it to the current output. "
+            "The bot will create a new output that combines the source images with your new image.\n\n"
+            "*Note: Send only one image attachment in your next message.*", 
+            ephemeral=True
+        )
+        
+        # Set up a temporary listener for the next message from this user
+        def check(message):
+            return (message.author.id == interaction.user.id and 
+                   message.channel.id == interaction.channel.id and
+                   message.attachments and
+                   any(attachment.filename.lower().endswith(ext) 
+                       for attachment in message.attachments 
+                       for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']))
+        
+        try:
+            # Wait for user to send a message with an image attachment
+            message = await interaction.client.wait_for('message', check=check, timeout=60.0)
+            
+            # Process the attached image
+            await self._process_add_image(interaction, message)
+            
+        except asyncio.TimeoutError:
+            # Send timeout message
+            await interaction.followup.send(
+                "⏰ **Timeout** - No image was received within 60 seconds. Please try again.", 
+                ephemeral=True
+            )
     
     async def apply_style(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style to the generated image."""
@@ -876,8 +879,11 @@ class ProcessRequestView(discord.ui.View):
     @discord.ui.button(label='📎 Add Image', style=discord.ButtonStyle.secondary)
     async def add_image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Add an image to the current request before processing."""
+        # Defer the interaction to keep it bound to the original message
+        await interaction.response.defer()
+        
         # Send instructions to user for uploading an image
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "📎 **Add Image to Request**\n\n"
             "Please upload an image in your next message to add it to the current request. "
             "This will convert your text-to-image request into a text + image request.\n\n"
