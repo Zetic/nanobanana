@@ -842,6 +842,7 @@ class ProcessRequestView(discord.ui.View):
         self.images = images
         self.original_text = text_content  # Keep original text for template processing
         self.existing_outputs = existing_outputs or []
+        self.message = None  # Store message reference for timeout handling
         
         # Add the style select dropdown
         self.add_item(ProcessStyleSelect(self))
@@ -1258,6 +1259,59 @@ class ProcessRequestView(discord.ui.View):
         # Disable all buttons when timeout occurs
         for item in self.children:
             item.disabled = True
+        
+        # If no message reference, just return
+        if not self.message:
+            return
+        
+        try:
+            # Create timeout embed
+            embed = discord.Embed(
+                title="🕒 Request Timed Out",
+                description="Your image generation request has expired without being processed.",
+                color=0xff9900
+            )
+            
+            # Add request details
+            if self.text_content.strip():
+                embed.add_field(
+                    name="Prompt:",
+                    value=f"{self.text_content[:100]}{'...' if len(self.text_content) > 100 else ''}",
+                    inline=False
+                )
+            
+            if self.images:
+                embed.add_field(
+                    name="Images:",
+                    value=f"{len(self.images)} image(s) were attached to this request",
+                    inline=False
+                )
+            
+            embed.add_field(
+                name="💡 Tip:",
+                value="Mention the bot again to create a new request",
+                inline=False
+            )
+            
+            embed.set_footer(text="The interactive session has expired.")
+            
+            # Update the message with timeout information
+            await self.message.edit(
+                content="🕒 **Request Timed Out** - No further processing possible",
+                embed=embed,
+                view=None,
+                attachments=[]
+            )
+            
+            logger.info("Successfully updated ProcessRequestView message on timeout")
+            
+        except Exception as e:
+            logger.error(f"Error updating ProcessRequestView message on timeout: {e}")
+            # Fallback - just disable the view
+            try:
+                await self.message.edit(view=None)
+            except:
+                pass  # Message might be deleted or inaccessible
 
 # Bot setup
 intents = discord.Intents.default()
@@ -1446,11 +1500,11 @@ async def handle_generation_request(message):
                 
                 # Generate the image directly
                 if len(images) == 1:
-                    generated_image = await generator.generate_image_from_image(images[0], text_content)
+                    generated_image = await generator.generate_image_from_text_and_image(text_content, images[0])
                 else:
                     # Use stitched image for multiple images
                     stitched_image = create_stitched_image(images)
-                    generated_image = await generator.generate_image_from_image(stitched_image, text_content)
+                    generated_image = await generator.generate_image_from_text_and_image(text_content, stitched_image)
                 
                 if generated_image:
                     # Create output and send result
@@ -1469,7 +1523,6 @@ async def handle_generation_request(message):
                     embed.add_field(name="Source:", value=f"Reply to bot message with {len(images)} image(s)", inline=False)
                     
                     # Send result
-                    import io
                     img_buffer = io.BytesIO()
                     generated_image.save(img_buffer, format='PNG')
                     img_buffer.seek(0)
@@ -1553,6 +1606,9 @@ async def handle_generation_request(message):
         
         # Update the status message with the embed and button
         await status_msg.edit(content=None, embed=embed, view=view, attachments=attachments)
+        
+        # Store message reference for timeout handling
+        view.message = status_msg
         
         await message.add_reaction('📋')  # Reaction to indicate request received
         logger.info(f"Request preview created for: '{text_content[:50] if text_content.strip() else 'image-only request'}...'")
