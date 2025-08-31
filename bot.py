@@ -68,6 +68,7 @@ class ProcessStyleSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
+            custom_id="process_style_select",
             row=1  # Place in second row below main buttons
         )
     
@@ -97,6 +98,7 @@ class StyleSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
+            custom_id="style_options_select",
             row=1  # Place in second row below navigation buttons
         )
     
@@ -108,7 +110,7 @@ class StyleSelect(discord.ui.Select):
 class StyleOptionsView(discord.ui.View):
     """View with style selection for chaining modifications on generated images."""
     
-    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=300):
+    def __init__(self, outputs: List[OutputItem], current_index: int = 0, original_text: str = "", original_images: List = None, timeout=None):
         super().__init__(timeout=timeout)
         self.outputs = outputs if outputs else []
         self.current_index = max(0, min(current_index, len(self.outputs) - 1)) if self.outputs else 0
@@ -136,7 +138,7 @@ class StyleOptionsView(discord.ui.View):
             return self.outputs[self.current_index]
         return None
     
-    @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0, custom_id='style_nav_left')
     async def nav_left_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to previous output."""
         if len(self.outputs) <= 1:
@@ -145,7 +147,7 @@ class StyleOptionsView(discord.ui.View):
         self.current_index = (self.current_index - 1) % len(self.outputs)
         await self._update_display(interaction)
     
-    @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0, custom_id='style_nav_right')
     async def nav_right_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Navigate to next output."""
         if len(self.outputs) <= 1:
@@ -195,7 +197,7 @@ class StyleOptionsView(discord.ui.View):
         
         await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
         
-    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
+    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='style_process_prompt')
     async def process_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process the current generated image with a prompt."""
         if not self.current_output:
@@ -354,7 +356,7 @@ class StyleOptionsView(discord.ui.View):
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
     
-    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='style_edit_prompt')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit prompt for the generated image."""
         # Use the current output's prompt_used as the default value
@@ -531,17 +533,11 @@ class StyleOptionsView(discord.ui.View):
             )
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
-    
-    async def on_timeout(self):
-        """Called when the view times out."""
-        # Disable all buttons when timeout occurs
-        for item in self.children:
-            item.disabled = True
 
 class ProcessRequestView(discord.ui.View):
     """View with buttons to process image generation request and apply style templates."""
     
-    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=300):
+    def __init__(self, text_content: str, images: List, existing_outputs: List[OutputItem] = None, timeout=None):
         super().__init__(timeout=timeout)
         self.text_content = text_content
         self.images = images
@@ -551,12 +547,12 @@ class ProcessRequestView(discord.ui.View):
         # Add the style select dropdown
         self.add_item(ProcessStyleSelect(self))
         
-    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary)
+    @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_request_button')
     async def process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Handle the process button click."""
         await self._process_request(interaction, button)
     
-    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary, custom_id='process_edit_prompt')
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show modal to edit the prompt."""
         modal = PromptModal(self.text_content, "Edit Prompt")
@@ -839,12 +835,6 @@ class ProcessRequestView(discord.ui.View):
             )
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
-    
-    async def on_timeout(self):
-        """Called when the view times out."""
-        # Disable all buttons when timeout occurs
-        for item in self.children:
-            item.disabled = True
 
 # Bot setup
 intents = discord.Intents.default()
@@ -866,6 +856,17 @@ async def on_ready():
     """Called when the bot is ready."""
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
+    
+    # Register persistent views for handling interactions after restarts
+    # Create empty view instances for persistent interaction handling
+    persistent_style_view = StyleOptionsView([], 0, "", [])
+    persistent_process_view = ProcessRequestView("", [])
+    
+    # Add views to the bot so they can handle interactions after restarts
+    bot.add_view(persistent_style_view)
+    bot.add_view(persistent_process_view)
+    
+    logger.info("Registered persistent views for post-restart interaction handling")
 
 @bot.event
 async def on_message(message):
