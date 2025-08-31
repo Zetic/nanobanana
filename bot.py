@@ -1374,6 +1374,13 @@ async def on_message(message):
     # Process commands
     await bot.process_commands(message)
 
+async def extract_text_from_message(message):
+    """Extract text content from a message, removing bot mentions."""
+    text_content = message.content
+    for mention in message.mentions:
+        text_content = text_content.replace(f'<@{mention.id}>', '').replace(f'<@!{mention.id}>', '').strip()
+    return text_content
+
 async def handle_generation_request(message):
     """Handle image generation request when bot is mentioned."""
     try:
@@ -1382,9 +1389,7 @@ async def handle_generation_request(message):
         status_msg = await message.reply("📥 Preparing your request...")
         
         # Extract text (remove bot mention)
-        text_content = message.content
-        for mention in message.mentions:
-            text_content = text_content.replace(f'<@{mention.id}>', '').strip()
+        text_content = await extract_text_from_message(message)
         
         logger.info(f"Processing request with text: '{text_content}'")
         
@@ -1402,20 +1407,30 @@ async def handle_generation_request(message):
                     else:
                         logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
         
-        # Check if this is a reply and extract images from the referenced message
+        # Extract data from referenced message if this is a reply
+        referenced_text = ""
+        referenced_has_images = False
+        
         if message.reference and message.reference.message_id:
             try:
                 # Fetch the referenced message
                 channel = message.channel
                 referenced_message = await channel.fetch_message(message.reference.message_id)
                 
+                # Extract text from referenced message
+                referenced_text = await extract_text_from_message(referenced_message)
+                
+                # Check if referenced message has images (attachments or embeds)
+                referenced_has_images = bool(referenced_message.attachments) or any(embed.image for embed in referenced_message.embeds)
+                
                 # Log information about the referenced message
                 if referenced_message.author == bot.user:
-                    logger.info(f"Referenced message is from bot itself - extracting images from bot's own message")
+                    logger.info(f"Referenced message is from bot itself - text: '{referenced_text}', has_images: {referenced_has_images}")
                     logger.info(f"Bot message has {len(referenced_message.attachments)} attachments")
                 else:
-                    logger.info(f"Referenced message is from user {referenced_message.author.id}")
+                    logger.info(f"Referenced message is from user {referenced_message.author.id} - text: '{referenced_text}', has_images: {referenced_has_images}")
                     logger.info(f"User message has {len(referenced_message.attachments)} attachments")
+                
                 
                 # Extract images from the referenced message (including bot's own messages)
                 if referenced_message.attachments:
@@ -1469,42 +1484,137 @@ async def handle_generation_request(message):
             except Exception as e:
                 logger.warning(f"Could not fetch referenced message: {e}")
         
-        # Set default text if no text content provided
-        if not text_content:
-            text_content = "A banana"
-            logger.info("No text provided, using default prompt: 'A banana'")
+        # Determine the final text content and whether to auto-process
+        final_text_content = text_content
+        should_auto_process = False
         
-        # Log final image count and summary
-        logger.info(f"Final processing summary: {len(images)} images extracted, text content: '{text_content[:50]}{'...' if len(text_content) > 50 else ''}'")
-        if images:
-            logger.info(f"Images will be used for image-to-image generation with prompt: '{text_content}'")
+        # Apply the 16 condition logic
+        current_has_text = bool(text_content.strip())
+        current_has_images = bool(len(images) > 0)  # Images from current message attachments
+        is_reply = bool(message.reference and message.reference.message_id)
+        reply_has_text = bool(referenced_text.strip())
+        reply_has_images = referenced_has_images
+        
+        # Extract images from referenced message for processing
+        reply_images = []
+        if is_reply and reply_has_images:
+            # Images were already extracted above into the images list
+            pass
+        
+        logger.info(f"Condition analysis: current_text={current_has_text}, current_images={current_has_images}, is_reply={is_reply}, reply_text={reply_has_text}, reply_images={reply_has_images}")
+        
+        if is_reply:
+            # Cases 5-16: Reply scenarios
+            if not current_has_text and not current_has_images:
+                # Cases 5-7: Ping bot in reply with no text or images
+                if reply_has_text and not reply_has_images:
+                    # Case 5: process reply text immediately
+                    final_text_content = referenced_text
+                    should_auto_process = True
+                    logger.info("Case 5: Reply with no content, reply has text only - auto-processing")
+                else:
+                    # Cases 6-7: show initial embed
+                    final_text_content = referenced_text if reply_has_text else "A banana"
+                    should_auto_process = False
+                    logger.info("Case 6-7: Reply with no content, reply has images - showing initial embed")
+            elif current_has_text and not current_has_images:
+                # Cases 8-10: Reply with just text
+                if reply_has_text:
+                    # Case 8: combine text with "and"
+                    final_text_content = f"{referenced_text} and {text_content}"
+                    should_auto_process = True
+                    logger.info("Case 8: Reply with text, reply has text - combining and auto-processing")
+                else:
+                    # Cases 9-10: process current text with reply images
+                    final_text_content = text_content
+                    should_auto_process = True
+                    logger.info("Case 9-10: Reply with text, reply has images - auto-processing")
+            elif not current_has_text and current_has_images:
+                # Cases 11-13: Reply with just images
+                if reply_has_text and not reply_has_images:
+                    # Case 11: process reply text with current images
+                    final_text_content = referenced_text
+                    should_auto_process = True
+                    logger.info("Case 11: Reply with images, reply has text only - auto-processing")
+                else:
+                    # Cases 12-13: show initial embed
+                    final_text_content = referenced_text if reply_has_text else "A banana"
+                    should_auto_process = False
+                    logger.info("Case 12-13: Reply with images, reply has images - showing initial embed")
+            else:
+                # Cases 14-16: Reply with text and images
+                if reply_has_text:
+                    # Cases 14, 16: combine text with "and"
+                    final_text_content = f"{referenced_text} and {text_content}"
+                    should_auto_process = True
+                    logger.info("Case 14/16: Reply with text+images, reply has text - combining and auto-processing")
+                else:
+                    # Case 15: process current text with all images
+                    final_text_content = text_content
+                    should_auto_process = True
+                    logger.info("Case 15: Reply with text+images, reply has images only - auto-processing")
         else:
-            logger.info(f"No images found, will do text-to-image generation with prompt: '{text_content}'")
+            # Cases 1-4: Direct mention scenarios
+            if not current_has_text and not current_has_images:
+                # Case 1: show initial embed
+                final_text_content = "A banana"
+                should_auto_process = False
+                logger.info("Case 1: Direct mention with no content - showing initial embed")
+            elif current_has_text and not current_has_images:
+                # Case 2: process text immediately
+                final_text_content = text_content
+                should_auto_process = True
+                logger.info("Case 2: Direct mention with text only - auto-processing")
+            elif not current_has_text and current_has_images:
+                # Case 3: show initial embed
+                final_text_content = "A banana"
+                should_auto_process = False
+                logger.info("Case 3: Direct mention with images only - showing initial embed")
+            else:
+                # Case 4: process text and images immediately
+                final_text_content = text_content
+                should_auto_process = True
+                logger.info("Case 4: Direct mention with text and images - auto-processing")
         
-        # Check if this is a reply to bot's message with images - if so, auto-process
-        is_reply_to_bot_with_images = (
-            message.reference and 
-            message.reference.message_id and 
-            images and  # We extracted images from the bot's message
-            len([img for img in images]) > 0  # We have actual images to process
-        )
+        # Set default text if still empty
+        if not final_text_content.strip():
+            final_text_content = "A banana"
+            logger.info("Using default prompt: 'A banana'")
         
-        if is_reply_to_bot_with_images:
-            logger.info("Auto-processing reply to bot message with extracted images")
+        # Log final processing summary
+        logger.info(f"Final processing summary: {len(images)} images extracted, text content: '{final_text_content[:50]}{'...' if len(final_text_content) > 50 else ''}', auto_process: {should_auto_process}")
+        
+        if should_auto_process:
+            logger.info("Auto-processing based on ping bot conditions")
             # Auto-process the image transformation
             try:
-                await status_msg.edit(content="🎨 Processing your image transformation...")
+                await status_msg.edit(content="🎨 Processing your request...")
                 
                 # Get the image generator
                 generator = get_image_generator()
                 
-                # Generate the image directly
-                if len(images) == 1:
-                    generated_image = await generator.generate_image_from_text_and_image(text_content, images[0])
+                # Generate the image based on available inputs
+                generated_image = None
+                if images and final_text_content.strip():
+                    # Text + Image(s) case
+                    if len(images) == 1:
+                        generated_image = await generator.generate_image_from_text_and_image(final_text_content, images[0])
+                    else:
+                        generated_image = await generator.generate_image_from_text_and_images(final_text_content, images)
+                elif images:
+                    # Image(s) only case - no text provided
+                    if len(images) == 1:
+                        generated_image = await generator.generate_image_from_image_only(images[0])
+                    else:
+                        generated_image = await generator.generate_image_from_images_only(images)
+                elif final_text_content.strip():
+                    # Text only case
+                    generated_image = await generator.generate_image_from_text(final_text_content)
                 else:
-                    # Use stitched image for multiple images
-                    stitched_image = create_stitched_image(images)
-                    generated_image = await generator.generate_image_from_text_and_image(text_content, stitched_image)
+                    logger.error("No valid inputs for generation in auto-process mode")
+                    await status_msg.edit(content="❌ No valid inputs for processing. Please try again.")
+                    await message.add_reaction('❌')
+                    return
                 
                 if generated_image:
                     # Create output and send result
@@ -1513,7 +1623,7 @@ async def handle_generation_request(message):
                     output = OutputItem(
                         image=generated_image,
                         filename=filename,
-                        prompt_used=text_content,
+                        prompt_used=final_text_content,
                         timestamp=timestamp
                     )
                     
@@ -1522,8 +1632,15 @@ async def handle_generation_request(message):
                         title=f"🎨 Generated Image - {bot.user.display_name}",
                         color=0x00ff00
                     )
-                    embed.add_field(name="Prompt used:", value=f"{text_content[:100]}{'...' if len(text_content) > 100 else ''}", inline=False)
-                    embed.add_field(name="Source:", value=f"Reply to bot message with {len(images)} image(s)", inline=False)
+                    embed.add_field(name="Prompt used:", value=f"{final_text_content[:100]}{'...' if len(final_text_content) > 100 else ''}", inline=False)
+                    
+                    # Set footer based on what was used for generation
+                    if final_text_content.strip() and images:
+                        embed.add_field(name="Source:", value=f"Text prompt with {len(images)} image(s)", inline=False)
+                    elif final_text_content.strip():
+                        embed.add_field(name="Source:", value="Text prompt", inline=False)
+                    elif images:
+                        embed.add_field(name="Source:", value=f"{len(images)} input image(s)", inline=False)
                     
                     # Send result
                     img_buffer = io.BytesIO()
@@ -1533,11 +1650,15 @@ async def handle_generation_request(message):
                     embed.set_image(url=f"attachment://{filename}")
                     
                     # Create style options view for further modifications
-                    style_view = StyleOptionsView([output], 0, text_content, images)
+                    style_view = StyleOptionsView([output], 0, final_text_content, images)
                     
                     await status_msg.edit(content=None, embed=embed, view=style_view, attachments=[file])
+                    
+                    # Store message reference for timeout handling
+                    style_view.message = status_msg
+                    
                     await message.add_reaction('✅')
-                    logger.info(f"Successfully auto-processed reply to bot message")
+                    logger.info(f"Successfully auto-processed request")
                     return
                 else:
                     logger.error("Failed to generate image in auto-process mode")
@@ -1550,8 +1671,7 @@ async def handle_generation_request(message):
                 await status_msg.edit(content="❌ Error processing image. Showing manual options below.")
                 # Fall through to manual processing view
         
-        # Keep the original message (no longer deleting it)
-        
+        # Show manual processing view for non-auto-process cases
         # Don't create any OutputItems for initial uploads - show images directly in embed
         input_outputs = []
         
@@ -1563,8 +1683,8 @@ async def handle_generation_request(message):
         
         # Set description based on what inputs we have
         attachments = []
-        if text_content and images:
-            embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
+        if final_text_content and images:
+            embed.description = f"**Prompt:** {final_text_content[:100]}{'...' if len(final_text_content) > 100 else ''}"
             embed.add_field(name="Input Images", value=f"📎 {len(images)} image(s) attached", inline=True)
             embed.add_field(name="Generation Type", value="🎨 Text + Image transformation", inline=True)
             # Use stitched image for display when multiple images, single image otherwise
@@ -1580,8 +1700,8 @@ async def handle_generation_request(message):
             file = discord.File(img_buffer, filename=preview_filename)
             embed.set_image(url=f"attachment://{preview_filename}")
             attachments.append(file)
-        elif text_content:
-            embed.description = f"**Prompt:** {text_content[:100]}{'...' if len(text_content) > 100 else ''}"
+        elif final_text_content:
+            embed.description = f"**Prompt:** {final_text_content[:100]}{'...' if len(final_text_content) > 100 else ''}"
             embed.add_field(name="Generation Type", value="📝 Text-to-image", inline=True)
         elif images:
             embed.description = "**Mode:** Image transformation and enhancement"
@@ -1605,7 +1725,7 @@ async def handle_generation_request(message):
         embed.set_footer(text="Click the button below to process your request")
         
         # Create the view with the process button (no existing outputs since we don't create OutputItems for initial uploads)
-        view = ProcessRequestView(text_content, images, existing_outputs=[])
+        view = ProcessRequestView(final_text_content, images, existing_outputs=[])
         
         # Update the status message with the embed and button
         await status_msg.edit(content=None, embed=embed, view=view, attachments=attachments)
@@ -1614,7 +1734,7 @@ async def handle_generation_request(message):
         view.message = status_msg
         
         await message.add_reaction('📋')  # Reaction to indicate request received
-        logger.info(f"Request preview created for: '{text_content[:50] if text_content.strip() else 'image-only request'}...'")
+        logger.info(f"Request preview created for: '{final_text_content[:50] if final_text_content.strip() else 'image-only request'}...'")
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
