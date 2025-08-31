@@ -175,7 +175,7 @@ class StyleOptionsView(discord.ui.View):
         
         # Create embed for current output
         embed = discord.Embed(
-            title="🎨 Generated Image - Nano Banana Bot",
+            title=f"🎨 Generated Image - {bot.user.display_name}",
             color=0x00ff00
         )
         
@@ -303,7 +303,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create final embed with result
                 embed = discord.Embed(
-                    title="🎨 Generated Image - Nano Banana Bot",
+                    title=f"🎨 Generated Image - {bot.user.display_name}",
                     color=0x00ff00
                 )
                 
@@ -476,7 +476,7 @@ class StyleOptionsView(discord.ui.View):
         
         # Create embed for current output
         embed = discord.Embed(
-            title="🎨 Generated Image - Nano Banana Bot",
+            title=f"🎨 Generated Image - {bot.user.display_name}",
             color=0x00ff00
         )
         
@@ -540,7 +540,7 @@ class StyleOptionsView(discord.ui.View):
             
             # Create embed for current output
             embed = discord.Embed(
-                title="🎨 Generated Image - Nano Banana Bot",
+                title=f"🎨 Generated Image - {bot.user.display_name}",
                 color=0x00ff00
             )
             
@@ -675,7 +675,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create final embed with styled result
                 embed = discord.Embed(
-                    title="🎨 Generated Image - Nano Banana Bot",
+                    title=f"🎨 Generated Image - {bot.user.display_name}",
                     color=0x00ff00
                 )
                 
@@ -1177,7 +1177,7 @@ class ProcessRequestView(discord.ui.View):
                 
                 # Create final embed with result
                 embed = discord.Embed(
-                    title="🎨 Generated Image - Nano Banana Bot",
+                    title=f"🎨 Generated Image - {bot.user.display_name}",
                     color=0x00ff00
                 )
                 
@@ -1287,16 +1287,35 @@ async def on_message(message):
     if message.author == bot.user:
         return
     
+    # Debug logging for mention detection
+    logger.debug(f"Message from {message.author.id}: '{message.content[:50]}...'")
+    logger.debug(f"Message mentions: {[user.id for user in message.mentions]}")
+    logger.debug(f"Bot user ID: {bot.user.id}")
+    logger.debug(f"Is reply: {message.reference is not None}")
+    if message.reference:
+        logger.debug(f"Reply to message ID: {message.reference.message_id}")
+    
     # Only process messages that mention the bot
     # This includes:
-    # - Direct mentions: "@Nano Banana create an image" 
-    # - Replies with mentions: "@Nano Banana use this image" (reply to bot's message)
+    # - Direct mentions: "@BotName create an image" 
+    # - Replies with mentions: "@BotName use this image" (reply to bot's message)
     # This excludes:
     # - Replies without mentions: "use this image" (reply to bot's message without @)
     # - Regular messages without mentions: "hello"
-    if bot.user in message.mentions:
-        logger.info(f"Processing message from {message.author.id} (mentioned bot)")
+    
+    # Check if bot is mentioned AND the mention is explicit in the message content
+    bot_mentioned_explicitly = (
+        bot.user in message.mentions and 
+        (f'<@{bot.user.id}>' in message.content or f'<@!{bot.user.id}>' in message.content)
+    )
+    
+    if bot_mentioned_explicitly:
+        logger.info(f"Processing message from {message.author.id} (explicitly mentioned bot)")
         await handle_generation_request(message)
+    else:
+        if bot.user in message.mentions:
+            logger.warning(f"Bot in mentions list but not explicitly mentioned in content. Message: '{message.content}' | Mentions: {[f'<@{u.id}>' for u in message.mentions]}")
+        logger.debug(f"Ignoring message from {message.author.id} (no explicit bot mention)")
     
     # Process commands
     await bot.process_commands(message)
@@ -1339,25 +1358,59 @@ async def handle_generation_request(message):
                 # Log information about the referenced message
                 if referenced_message.author == bot.user:
                     logger.info(f"Referenced message is from bot itself - extracting images from bot's own message")
+                    logger.info(f"Bot message has {len(referenced_message.attachments)} attachments")
                 else:
                     logger.info(f"Referenced message is from user {referenced_message.author.id}")
+                    logger.info(f"User message has {len(referenced_message.attachments)} attachments")
                 
                 # Extract images from the referenced message (including bot's own messages)
                 if referenced_message.attachments:
                     await status_msg.edit(content="📥 Downloading images from reply...")
+                    logger.info(f"Processing {len(referenced_message.attachments)} attachments from referenced message")
                     for attachment in referenced_message.attachments[:config.MAX_IMAGES - len(images)]:
+                        logger.info(f"Processing attachment: {attachment.filename} ({attachment.size} bytes) - URL: {attachment.url}")
                         if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                             if attachment.size <= config.MAX_IMAGE_SIZE:
+                                logger.info(f"Attempting to download image: {attachment.filename}")
                                 image = await download_image(attachment.url)
                                 if image:
                                     images.append(image)
-                                    logger.info(f"Downloaded image from reply: {attachment.filename}")
+                                    logger.info(f"Successfully downloaded and added image from reply: {attachment.filename}")
+                                else:
+                                    logger.error(f"Failed to download image from reply: {attachment.filename}")
                             else:
                                 logger.warning(f"Image too large in reply: {attachment.filename} ({attachment.size} bytes)")
+                        else:
+                            logger.debug(f"Skipping non-image attachment: {attachment.filename}")
                         
                         # Stop if we've reached the maximum number of images
                         if len(images) >= config.MAX_IMAGES:
+                            logger.info(f"Reached maximum image limit ({config.MAX_IMAGES}), stopping")
                             break
+                else:
+                    if referenced_message.author == bot.user:
+                        logger.warning(f"Bot message has no attachments! This might indicate the bot's images aren't being saved as attachments")
+                        logger.info(f"Bot message content: '{referenced_message.content[:100]}...'")
+                        logger.info(f"Bot message embeds: {len(referenced_message.embeds)}")
+                        if referenced_message.embeds:
+                            for i, embed in enumerate(referenced_message.embeds):
+                                logger.info(f"Embed {i}: title='{embed.title}', image_url='{embed.image.url if embed.image else 'None'}'")
+                                
+                                # Try to extract image from embed
+                                if embed.image and embed.image.url:
+                                    if len(images) < config.MAX_IMAGES:
+                                        logger.info(f"Attempting to download image from embed: {embed.image.url}")
+                                        await status_msg.edit(content="📥 Downloading image from embed...")
+                                        image = await download_image(embed.image.url)
+                                        if image:
+                                            images.append(image)
+                                            logger.info(f"Successfully downloaded and added image from bot's embed")
+                                        else:
+                                            logger.error(f"Failed to download image from bot's embed: {embed.image.url}")
+                                    else:
+                                        logger.info(f"Reached maximum image limit, skipping embed image")
+                    else:
+                        logger.info(f"Referenced user message has no attachments to extract")
                             
             except Exception as e:
                 logger.warning(f"Could not fetch referenced message: {e}")
@@ -1367,6 +1420,80 @@ async def handle_generation_request(message):
             text_content = "A banana"
             logger.info("No text provided, using default prompt: 'A banana'")
         
+        # Log final image count and summary
+        logger.info(f"Final processing summary: {len(images)} images extracted, text content: '{text_content[:50]}{'...' if len(text_content) > 50 else ''}'")
+        if images:
+            logger.info(f"Images will be used for image-to-image generation with prompt: '{text_content}'")
+        else:
+            logger.info(f"No images found, will do text-to-image generation with prompt: '{text_content}'")
+        
+        # Check if this is a reply to bot's message with images - if so, auto-process
+        is_reply_to_bot_with_images = (
+            message.reference and 
+            message.reference.message_id and 
+            images and  # We extracted images from the bot's message
+            len([img for img in images]) > 0  # We have actual images to process
+        )
+        
+        if is_reply_to_bot_with_images:
+            logger.info("Auto-processing reply to bot message with extracted images")
+            # Auto-process the image transformation
+            try:
+                await status_msg.edit(content="🎨 Processing your image transformation...")
+                
+                # Get the image generator
+                generator = get_image_generator()
+                
+                # Generate the image directly
+                if len(images) == 1:
+                    generated_image = await generator.generate_image_from_image(images[0], text_content)
+                else:
+                    # Use stitched image for multiple images
+                    stitched_image = create_stitched_image(images)
+                    generated_image = await generator.generate_image_from_image(stitched_image, text_content)
+                
+                if generated_image:
+                    # Create output and send result
+                    from genai_client import OutputItem
+                    import datetime
+                    
+                    filename = f"generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    output = OutputItem(generated_image, text_content, filename)
+                    
+                    # Create final embed
+                    embed = discord.Embed(
+                        title=f"🎨 Generated Image - {bot.user.display_name}",
+                        color=0x00ff00
+                    )
+                    embed.add_field(name="Prompt used:", value=f"{text_content[:100]}{'...' if len(text_content) > 100 else ''}", inline=False)
+                    embed.add_field(name="Source:", value=f"Reply to bot message with {len(images)} image(s)", inline=False)
+                    
+                    # Send result
+                    import io
+                    img_buffer = io.BytesIO()
+                    generated_image.save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+                    file = discord.File(img_buffer, filename=filename)
+                    embed.set_image(url=f"attachment://{filename}")
+                    
+                    # Create style options view for further modifications
+                    style_view = StyleOptionsView([output], 0, text_content, images)
+                    
+                    await status_msg.edit(content=None, embed=embed, view=style_view, attachments=[file])
+                    await message.add_reaction('✅')
+                    logger.info(f"Successfully auto-processed reply to bot message")
+                    return
+                else:
+                    logger.error("Failed to generate image in auto-process mode")
+                    await status_msg.edit(content="❌ Failed to process image. Please try again.")
+                    await message.add_reaction('❌')
+                    return
+                    
+            except Exception as e:
+                logger.error(f"Error in auto-processing: {e}")
+                await status_msg.edit(content="❌ Error processing image. Showing manual options below.")
+                # Fall through to manual processing view
+        
         # Keep the original message (no longer deleting it)
         
         # Don't create any OutputItems for initial uploads - show images directly in embed
@@ -1374,7 +1501,7 @@ async def handle_generation_request(message):
         
         # Create preview embed with the request details
         embed = discord.Embed(
-            title="🎨 Image Generation Request - Nano Banana Bot",
+            title=f"🎨 Image Generation Request - {bot.user.display_name}",
             color=0x0099ff
         )
         
@@ -1442,20 +1569,20 @@ async def handle_generation_request(message):
 async def info_command(ctx):
     """Show help information."""
     embed = discord.Embed(
-        title="🍌 Nano Banana Bot - Help",
+        title=f"🍌 {bot.user.display_name} - Help",
         description="I'm a bot that generates images using Google's AI!",
         color=0xffff00
     )
     embed.add_field(
         name="📋 How to use",
-        value="Just mention me (@Nano Banana) in a message with your prompt and optionally attach images!",
+        value=f"Just mention me ({bot.user.mention}) in a message with your prompt and optionally attach images!",
         inline=False
     )
     embed.add_field(
         name="🎨 Examples",
-        value="• `@Nano Banana Create a nano banana in space`\n"
-              "• `@Nano Banana Make this cat magical` (with image attached)\n"
-              "• `@Nano Banana Transform this into cyberpunk style` (with multiple images)",
+        value=f"• `{bot.user.mention} Create a nano banana in space`\n"
+              f"• `{bot.user.mention} Make this cat magical` (with image attached)\n"
+              f"• `{bot.user.mention} Transform this into cyberpunk style` (with multiple images)",
         inline=False
     )
     embed.add_field(
@@ -1490,7 +1617,7 @@ def main():
         logger.error("GOOGLE_API_KEY not found in environment variables")
         return
     
-    logger.info("Starting Nano Banana Discord Bot...")
+    logger.info("Starting Discord Bot...")
     bot.run(config.DISCORD_TOKEN)
 
 if __name__ == "__main__":
