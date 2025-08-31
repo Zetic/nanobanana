@@ -139,58 +139,158 @@ class StyleOptionsView(discord.ui.View):
         if not self.current_output:
             return
             
-        # Create a new ProcessRequestView - use original images if current output is stitched input
+        # Disable all buttons to prevent multiple clicks
+        for item in self.children:
+            item.disabled = True
+            
+        # Determine images to use - use original images if current output is stitched input
         images_to_use = [self.current_output.image]
         if (self.current_output.filename.startswith("input_stitched_") and 
             self.original_images and len(self.original_images) > 1):
             # If processing a stitched input, use the original input images
             images_to_use = self.original_images
         
-        view = ProcessRequestView(self.original_text, images_to_use, existing_outputs=self.outputs)
+        # Update button label to show processing
+        button.label = '⏳ Processing...'
         
-        # Create embed for new request
+        # Update embed to show processing
         embed = discord.Embed(
-            title="🎨 Image Generation Request - Nano Banana Bot",
-            color=0x0099ff
+            title="🎨 Processing Request - Nano Banana Bot",
+            color=0xffaa00
         )
         
-        current_output = self.current_output
-        current_prompt = self.original_text
-        
-        # Show both prompts in the request
-        if current_output.prompt_used:
-            embed.add_field(name="Prompt used:", value=f"{current_output.prompt_used[:100]}{'...' if len(current_output.prompt_used) > 100 else ''}", inline=False)
-        
-        if current_prompt:
-            embed.add_field(name="Current Prompt:", value=f"{current_prompt[:100]}{'...' if len(current_prompt) > 100 else ''}", inline=False)
+        # Set description based on what we're processing
+        if self.original_text and self.original_text.strip():
+            embed.description = f"**Prompt:** {self.original_text[:100]}{'...' if len(self.original_text) > 100 else ''}"
+            embed.set_footer(text=f"Using {len(images_to_use)} input image(s) with text prompt")
         else:
-            embed.add_field(name="Current Prompt:", value="No prompt", inline=False)
+            embed.description = "**Mode:** Transforming and enhancing images"
+            embed.set_footer(text=f"Processing {len(images_to_use)} input image(s)")
         
-        embed.add_field(name="Input Images", value=f"📎 {len(images_to_use)} {'original' if len(images_to_use) > 1 and self.current_output.filename.startswith('input_stitched_') else 'generated'} image(s)", inline=True)
-        embed.add_field(name="Generation Type", value="🎨 Text + Image transformation" if current_prompt else "🖼️ Image-only transformation", inline=True)
-        embed.add_field(name="Status", value="⏸️ Waiting for confirmation", inline=False)
-        embed.set_footer(text="Click the button below to process your request")
-        
-        # For stitched inputs, show the stitched image but use original images for processing
-        # For regular generated images, show the generated image
-        if (self.current_output.filename.startswith("input_stitched_") and 
-            self.original_images and len(self.original_images) > 1):
-            # Show stitched image but use original images for processing
-            img_buffer = io.BytesIO()
-            current_output.image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-            file = discord.File(img_buffer, filename=current_output.filename)
-            embed.set_image(url=f"attachment://{current_output.filename}")
-            embed.add_field(name="Note", value="🔄 Will process using original input images", inline=False)
+        # Add input image to embed
+        attachments = []
+        if len(images_to_use) > 1:
+            display_image = create_stitched_image(images_to_use)
         else:
-            # Preserve the current image in the request display
-            img_buffer = io.BytesIO()
-            current_output.image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-            file = discord.File(img_buffer, filename=current_output.filename)
-            embed.set_image(url=f"attachment://{current_output.filename}")
+            display_image = images_to_use[0]
+        img_buffer = io.BytesIO()
+        display_image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        input_filename = f"processing_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        file = discord.File(img_buffer, filename=input_filename)
+        embed.set_image(url=f"attachment://{input_filename}")
+        attachments.append(file)
         
-        await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
+        embed.add_field(name="Status", value="🔄 Generating image with AI...", inline=False)
+        
+        await interaction.response.edit_message(embed=embed, view=self, attachments=attachments)
+        
+        # Process the image generation
+        try:
+            # Generate the image based on available inputs
+            generated_image = None
+            if self.original_text and self.original_text.strip():
+                # Text + Image(s) case
+                if len(images_to_use) == 1:
+                    generated_image = await get_image_generator().generate_image_from_text_and_image(
+                        self.original_text, images_to_use[0]
+                    )
+                else:
+                    generated_image = await get_image_generator().generate_image_from_text_and_images(
+                        self.original_text, images_to_use
+                    )
+            else:
+                # Image(s) only case - no text provided
+                if len(images_to_use) == 1:
+                    generated_image = await get_image_generator().generate_image_from_image_only(images_to_use[0])
+                else:
+                    generated_image = await get_image_generator().generate_image_from_images_only(images_to_use)
+            
+            if generated_image:
+                # Save the generated image
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"generated_{timestamp}.png"
+                filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+                generated_image.save(filepath)
+                
+                # Create new output item
+                new_output = OutputItem(
+                    image=generated_image,
+                    filename=filename,
+                    prompt_used=self.original_text.strip() or "Image transformation",
+                    timestamp=timestamp
+                )
+                
+                # Add to existing outputs to create history
+                all_outputs = self.outputs + [new_output]
+                
+                # Create final embed with result
+                embed = discord.Embed(
+                    title="🎨 Generated Image - Nano Banana Bot",
+                    color=0x00ff00
+                )
+                
+                # Show prompt used for this generation
+                if self.original_text and self.original_text.strip():
+                    embed.add_field(name="Prompt used:", value=f"{self.original_text[:100]}{'...' if len(self.original_text) > 100 else ''}", inline=False)
+                else:
+                    embed.add_field(name="Prompt used:", value="Image transformation", inline=False)
+                
+                # Show output count if we have multiple
+                if len(all_outputs) > 1:
+                    embed.add_field(name="Output", value=f"{len(all_outputs)} of {len(all_outputs)}", inline=True)
+                
+                embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
+                
+                # Set footer based on what was used for generation
+                if self.original_text and self.original_text.strip():
+                    embed.set_footer(text=f"Generated using {len(images_to_use)} input image(s) with text prompt")
+                else:
+                    embed.set_footer(text=f"Generated from {len(images_to_use)} input image(s)")
+                
+                # Save image to buffer for Discord
+                img_buffer = io.BytesIO()
+                generated_image.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                
+                # Create style options view for chaining modifications
+                style_view = StyleOptionsView(all_outputs, len(all_outputs) - 1, self.original_text, self.original_images)
+                
+                # Send the result as a file attachment with the embed and style options
+                file = discord.File(img_buffer, filename=filename)
+                embed.set_image(url=f"attachment://{filename}")
+                
+                # Send with style options for chaining
+                await interaction.edit_original_response(embed=embed, view=style_view, attachments=[file])
+                
+                logger.info(f"Successfully generated and sent image for request: '{self.original_text[:50] if self.original_text and self.original_text.strip() else 'image-only transformation'}...'")
+            else:
+                # Update embed to show failure
+                embed = discord.Embed(
+                    title="❌ Generation Failed - Nano Banana Bot",
+                    color=0xff0000
+                )
+                
+                # Set description based on what failed
+                if self.original_text and self.original_text.strip():
+                    embed.description = f"**Prompt:** {self.original_text[:100]}{'...' if len(self.original_text) > 100 else ''}"
+                else:
+                    embed.description = f"**Failed:** Image transformation with {len(images_to_use)} input image(s)"
+                
+                embed.add_field(name="Status", value="❌ Failed to generate image. Please try again.", inline=False)
+                await interaction.edit_original_response(embed=embed, view=None)
+                logger.error("Failed to generate image")
+                
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            # Update embed to show error
+            embed = discord.Embed(
+                title="❌ Error - Nano Banana Bot",
+                description="An error occurred while processing your request.",
+                color=0xff0000
+            )
+            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            await interaction.edit_original_response(embed=embed, view=None)
     
     @discord.ui.button(label='✏️ Edit Prompt', style=discord.ButtonStyle.secondary)
     async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -262,19 +362,31 @@ class StyleOptionsView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             
-            # Update embed to show processing
-            embed = discord.Embed(
-                title="🏷️ Applying Sticker Style - Nano Banana Bot",
-                description="Converting the generated image to sticker style...",
-                color=0x9932cc
-            )
-            embed.add_field(name="Status", value="🔄 Applying sticker template...", inline=False)
-            embed.set_footer(text="Creating sticker with black outline and vector art style")
+            # Update button label to show processing
+            button.label = '⏳ Processing...'
             
-            await interaction.response.edit_message(embed=embed, view=self)
+            # Update embed to show processing (using consistent embed style)
+            embed = discord.Embed(
+                title="🎨 Processing Request - Nano Banana Bot",
+                color=0xffaa00
+            )
             
             # Apply sticker template to the generated image
             sticker_prompt = config.TEMPLATES['sticker']['image_only']
+            embed.description = f"**Prompt:** {sticker_prompt[:100]}{'...' if len(sticker_prompt) > 100 else ''}"
+            embed.set_footer(text="Using 1 input image(s) with sticker template")
+            
+            # Add input image to embed
+            img_buffer = io.BytesIO()
+            self.current_output.image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            input_filename = f"sticker_input_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            file = discord.File(img_buffer, filename=input_filename)
+            embed.set_image(url=f"attachment://{input_filename}")
+            
+            embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
+            
+            await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
             
             # Generate new image with sticker style
             sticker_image = await get_image_generator().generate_image_from_text_and_image(
@@ -301,11 +413,11 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create final embed with sticker result
                 embed = discord.Embed(
-                    title="🏷️ Sticker Style Applied - Nano Banana Bot",
+                    title="🎨 Generated Image - Nano Banana Bot",
                     color=0x00ff00
                 )
                 embed.add_field(name="Prompt used:", value="Sticker style: Black outline vector art with transparent background", inline=False)
-                embed.add_field(name="Status", value="✅ Sticker style applied!", inline=False)
+                embed.add_field(name="Status", value="✅ Generation complete!", inline=False)
                 embed.set_footer(text="Converted to sticker style")
                 
                 # Save image to buffer for Discord
@@ -326,7 +438,7 @@ class StyleOptionsView(discord.ui.View):
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
-                    title="❌ Style Application Failed - Nano Banana Bot",
+                    title="❌ Generation Failed - Nano Banana Bot",
                     description="Failed to apply sticker style to the image.",
                     color=0xff0000
                 )
@@ -339,7 +451,7 @@ class StyleOptionsView(discord.ui.View):
             # Update embed to show error
             embed = discord.Embed(
                 title="❌ Error - Nano Banana Bot",
-                description="An error occurred while applying the style.",
+                description="An error occurred while processing your request.",
                 color=0xff0000
             )
             embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
@@ -410,13 +522,13 @@ class ProcessRequestView(discord.ui.View):
         # Apply the sticker template
         self._apply_template('sticker')
         
-        # Update the embed to show the template was applied
+        # Update the embed to show processing (using consistent style)
         embed = discord.Embed(
-            title="🏷️ Sticker Template Applied - Nano Banana Bot",
-            description=f"**Template:** Sticker style with black outline and vector art\n**Prompt:** {self.text_content[:100] if self.text_content else 'Applied to images'}{'...' if len(self.text_content) > 100 else ''}",
-            color=0x9932cc
+            title="🎨 Processing Request - Nano Banana Bot",
+            description=f"**Prompt:** {self.text_content[:100] if self.text_content else 'Sticker template applied'}{'...' if len(self.text_content) > 100 else ''}",
+            color=0xffaa00
         )
-        embed.add_field(name="Status", value="🏷️ Template applied, processing...", inline=False)
+        embed.add_field(name="Status", value="🔄 Generating sticker with AI...", inline=False)
         if self.images:
             embed.set_footer(text=f"Using {len(self.images)} input image(s) with sticker template")
         else:
