@@ -1287,8 +1287,15 @@ async def on_message(message):
     if message.author == bot.user:
         return
     
-    # Check if the bot is mentioned
+    # Only process messages that mention the bot
+    # This includes:
+    # - Direct mentions: "@Nano Banana create an image" 
+    # - Replies with mentions: "@Nano Banana use this image" (reply to bot's message)
+    # This excludes:
+    # - Replies without mentions: "use this image" (reply to bot's message without @)
+    # - Regular messages without mentions: "hello"
     if bot.user in message.mentions:
+        logger.info(f"Processing message from {message.author.id} (mentioned bot)")
         await handle_generation_request(message)
     
     # Process commands
@@ -1329,7 +1336,13 @@ async def handle_generation_request(message):
                 channel = message.channel
                 referenced_message = await channel.fetch_message(message.reference.message_id)
                 
-                # Extract images from the referenced message
+                # Log information about the referenced message
+                if referenced_message.author == bot.user:
+                    logger.info(f"Referenced message is from bot itself - extracting images from bot's own message")
+                else:
+                    logger.info(f"Referenced message is from user {referenced_message.author.id}")
+                
+                # Extract images from the referenced message (including bot's own messages)
                 if referenced_message.attachments:
                     await status_msg.edit(content="📥 Downloading images from reply...")
                     for attachment in referenced_message.attachments[:config.MAX_IMAGES - len(images)]:
