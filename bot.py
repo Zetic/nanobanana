@@ -1508,11 +1508,14 @@ async def handle_generation_request(message):
                 
                 if generated_image:
                     # Create output and send result
-                    from genai_client import OutputItem
-                    import datetime
-                    
-                    filename = f"generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                    output = OutputItem(generated_image, text_content, filename)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"generated_{timestamp}.png"
+                    output = OutputItem(
+                        image=generated_image,
+                        filename=filename,
+                        prompt_used=text_content,
+                        timestamp=timestamp
+                    )
                     
                     # Create final embed
                     embed = discord.Embed(
