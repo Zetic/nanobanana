@@ -327,9 +327,24 @@ class StyleOptionsView(discord.ui.View):
                 await self._update_display(interaction)
                 return
             else:
-                # Show persistence failure message
-                await self._show_persistence_failure(interaction)
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.outputs = fallback_view.outputs
+                    self.current_index = fallback_view.current_index
+                    self.original_text = fallback_view.original_text
+                    self.original_images = fallback_view.original_images
+                    self.interaction_id = fallback_view.interaction_id
+                    # Continue with navigation
+                    if len(self.outputs) > 1:
+                        self.current_index = (self.current_index - 1) % len(self.outputs)
+                    await self._update_display(interaction)
+                    return
+                else:
+                    # Defer the interaction to avoid timeout
+                    await interaction.response.defer()
+                    return
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -356,9 +371,24 @@ class StyleOptionsView(discord.ui.View):
                 await self._update_display(interaction)
                 return
             else:
-                # Show persistence failure message
-                await self._show_persistence_failure(interaction)
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.outputs = fallback_view.outputs
+                    self.current_index = fallback_view.current_index
+                    self.original_text = fallback_view.original_text
+                    self.original_images = fallback_view.original_images
+                    self.interaction_id = fallback_view.interaction_id
+                    # Continue with navigation
+                    if len(self.outputs) > 1:
+                        self.current_index = (self.current_index + 1) % len(self.outputs)
+                    await self._update_display(interaction)
+                    return
+                else:
+                    # Defer the interaction to avoid timeout
+                    await interaction.response.defer()
+                    return
         if len(self.outputs) <= 1:
             await interaction.response.defer()
             return
@@ -366,54 +396,168 @@ class StyleOptionsView(discord.ui.View):
         await self._update_display(interaction)
     
     async def _try_restore_from_persistence(self, interaction: discord.Interaction):
-        """Try to restore view state from interaction context."""
+        """Try to restore view state from interaction context with multiple fallback strategies."""
         try:
-            # Try to extract interaction ID from embed or message content
+            # Strategy 1: Extract from embed footer (current format: "Persistent Session ID: {uuid}")
             if hasattr(interaction, 'message') and interaction.message and interaction.message.embeds:
                 embed = interaction.message.embeds[0]
-                # Look for interaction ID in embed footer or custom field
-                if embed.footer and 'ID:' in embed.footer.text:
-                    interaction_id = embed.footer.text.split('ID:')[1].strip()
-                    return self.from_interaction_id(interaction_id)
+                
+                if embed.footer and embed.footer.text:
+                    footer_text = embed.footer.text
+                    # Try current format: "Persistent Session ID: {uuid}"
+                    if 'Persistent Session ID:' in footer_text:
+                        interaction_id = footer_text.split('Persistent Session ID:')[1].strip()
+                        restored_view = self.from_interaction_id(interaction_id)
+                        if restored_view:
+                            return restored_view
                     
-                # Try to find ID in embed fields
+                    # Try legacy format: "ID: {uuid}"
+                    if 'ID:' in footer_text:
+                        interaction_id = footer_text.split('ID:')[1].strip()
+                        restored_view = self.from_interaction_id(interaction_id)
+                        if restored_view:
+                            return restored_view
+                
+                # Strategy 2: Look for ID in embed fields
                 for field in embed.fields:
-                    if 'Interaction ID' in field.name and field.value:
-                        return self.from_interaction_id(field.value.strip())
+                    if field.name and field.value:
+                        if 'Interaction ID' in field.name or 'Session ID' in field.name:
+                            restored_view = self.from_interaction_id(field.value.strip())
+                            if restored_view:
+                                return restored_view
+                
+                # Strategy 3: Extract UUID pattern from any embed text
+                import re
+                uuid_pattern = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                
+                # Check title, description, footer
+                text_sources = []
+                if embed.title:
+                    text_sources.append(embed.title)
+                if embed.description:
+                    text_sources.append(embed.description)
+                if embed.footer and embed.footer.text:
+                    text_sources.append(embed.footer.text)
+                
+                for text in text_sources:
+                    matches = re.findall(uuid_pattern, text, re.IGNORECASE)
+                    for match in matches:
+                        restored_view = self.from_interaction_id(match)
+                        if restored_view:
+                            return restored_view
+            
+            # Strategy 4: Try to extract from message content if it exists
+            if hasattr(interaction, 'message') and interaction.message and interaction.message.content:
+                import re
+                uuid_pattern = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                matches = re.findall(uuid_pattern, interaction.message.content, re.IGNORECASE)
+                for match in matches:
+                    restored_view = self.from_interaction_id(match)
+                    if restored_view:
+                        return restored_view
             
             return None
         except Exception as e:
             logger.error(f"Error trying to restore from persistence: {e}")
             return None
     
-    async def _show_persistence_failure(self, interaction: discord.Interaction):
-        """Show message when persistence restoration fails."""
-        embed = discord.Embed(
-            title="⚠️ Interaction Expired - Nano Banana Bot",
-            description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
-            color=0xff9900
-        )
-        embed.add_field(
-            name="What happened?", 
-            value="Button interactions on messages sent before a bot restart cannot access the original image data.", 
-            inline=False
-        )
-        embed.add_field(
-            name="How to fix this?", 
-            value="Simply mention the bot again with your prompt to start a new generation.", 
-            inline=False
-        )
-        
+    async def _create_fallback_state(self, interaction: discord.Interaction):
+        """Create a minimal working state when persistence completely fails."""
         try:
-            await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-        except discord.InteractionResponse:
-            await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+            # Generate a new interaction ID for this fallback session
+            persistence_manager = get_persistence_manager()
+            fallback_id = persistence_manager.generate_interaction_id()
+            
+            # Try to extract any useful information from the message
+            prompt_text = "Image interaction"
+            if hasattr(interaction, 'message') and interaction.message:
+                if interaction.message.embeds:
+                    embed = interaction.message.embeds[0]
+                    # Look for any prompt information in embed fields
+                    for field in embed.fields:
+                        if field.name and 'prompt' in field.name.lower() and field.value:
+                            prompt_text = field.value
+                            break
+                    # Also check title and description
+                    if embed.description and len(embed.description.strip()) > 0:
+                        prompt_text = embed.description[:200]  # Take first 200 chars
+                
+                # Try to download any images attached to the message
+                image_attachments = []
+                if interaction.message.attachments:
+                    from PIL import Image
+                    for attachment in interaction.message.attachments[:3]:  # Limit to 3 images
+                        if attachment.content_type and attachment.content_type.startswith('image/'):
+                            try:
+                                image_data = await attachment.read()
+                                image = Image.open(io.BytesIO(image_data))
+                                image_attachments.append(image)
+                            except Exception as e:
+                                logger.warning(f"Failed to download attachment: {e}")
+            
+            # Create a minimal working view with the extracted information
+            if len(image_attachments) > 0:
+                # If we found images, create outputs from them
+                outputs = []
+                for i, img in enumerate(image_attachments):
+                    output = OutputItem(
+                        image=img,
+                        filename=f"recovered_image_{i+1}.png",
+                        prompt_used=prompt_text,
+                        timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                        interaction_id=fallback_id
+                    )
+                    outputs.append(output)
+                
+                # Create view with recovered images
+                fallback_view = StyleOptionsView(
+                    outputs=outputs,
+                    current_index=0,
+                    original_text=prompt_text,
+                    original_images=image_attachments,
+                    interaction_id=fallback_id
+                )
+                fallback_view._save_state()  # Save the new state
+                return fallback_view
+            else:
+                # No images found, create a placeholder that can still work
+                logger.info(f"Creating minimal fallback state for interaction without images")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to create fallback state: {e}")
+            return None
     
     async def _update_display(self, interaction: discord.Interaction):
         """Update the display with the current output."""
         if not self.outputs:
-            await self._show_persistence_failure(interaction)
-            return
+            # Try to create fallback state instead of showing failure message
+            fallback_view = await self._create_fallback_state(interaction)
+            if fallback_view:
+                # Update this view with fallback data
+                self.outputs = fallback_view.outputs
+                self.current_index = fallback_view.current_index
+                self.original_text = fallback_view.original_text
+                self.original_images = fallback_view.original_images
+                self.interaction_id = fallback_view.interaction_id
+                # Continue with display update
+            else:
+                # Last resort: show a helpful message to re-initiate
+                embed = discord.Embed(
+                    title="🔄 Session Recovery - Nano Banana Bot",
+                    description="Please mention the bot again with your prompt to continue generating images.",
+                    color=0x0099ff
+                )
+                embed.add_field(
+                    name="How to continue", 
+                    value="Simply type `@NanoBanana your prompt here` with any images you want to use.", 
+                    inline=False
+                )
+                try:
+                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                except discord.InteractionResponse:
+                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                return
             
         current_output = self.outputs[self.current_index]
         
@@ -473,11 +617,39 @@ class StyleOptionsView(discord.ui.View):
                 self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
                 # Continue with processing if we now have outputs
                 if not self.current_output:
-                    await self._show_persistence_failure(interaction)
-                    return
+                    # Try to create fallback state
+                    fallback_view = await self._create_fallback_state(interaction)
+                    if fallback_view:
+                        # Update this view with fallback data
+                        self.outputs = fallback_view.outputs
+                        self.current_index = fallback_view.current_index
+                        self.original_text = fallback_view.original_text
+                        self.original_images = fallback_view.original_images
+                        self.interaction_id = fallback_view.interaction_id
+                        # Try again
+                        if not self.current_output:
+                            await interaction.response.defer()
+                            return
+                    else:
+                        await interaction.response.defer()
+                        return
             else:
-                await self._show_persistence_failure(interaction)
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.outputs = fallback_view.outputs
+                    self.current_index = fallback_view.current_index
+                    self.original_text = fallback_view.original_text
+                    self.original_images = fallback_view.original_images
+                    self.interaction_id = fallback_view.interaction_id
+                    # Try again
+                    if not self.current_output:
+                        await interaction.response.defer()
+                        return
+                else:
+                    await interaction.response.defer()
+                    return
             
         # Disable all buttons to prevent multiple clicks
         for item in self.children:
@@ -649,12 +821,39 @@ class StyleOptionsView(discord.ui.View):
                 self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
                 # Continue with edit prompt if we now have outputs
                 if not self.current_output:
-                    await self._show_persistence_failure(interaction)
-                    return
+                    # Try to create fallback state
+                    fallback_view = await self._create_fallback_state(interaction)
+                    if fallback_view:
+                        # Update this view with fallback data
+                        self.outputs = fallback_view.outputs
+                        self.current_index = fallback_view.current_index
+                        self.original_text = fallback_view.original_text
+                        self.original_images = fallback_view.original_images
+                        self.interaction_id = fallback_view.interaction_id
+                        # Try again
+                        if not self.current_output:
+                            await interaction.response.defer()
+                            return
+                    else:
+                        await interaction.response.defer()
+                        return
             else:
-                # Show persistence failure message
-                await self._show_persistence_failure(interaction)
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.outputs = fallback_view.outputs
+                    self.current_index = fallback_view.current_index
+                    self.original_text = fallback_view.original_text
+                    self.original_images = fallback_view.original_images
+                    self.interaction_id = fallback_view.interaction_id
+                    # Try again
+                    if not self.current_output:
+                        await interaction.response.defer()
+                        return
+                else:
+                    await interaction.response.defer()
+                    return
             
         # Use the current output's prompt_used as the default value
         default_prompt = ""
@@ -728,12 +927,39 @@ class StyleOptionsView(discord.ui.View):
                 self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
                 # Continue with style application if we now have outputs
                 if not self.current_output:
-                    await self._show_persistence_failure(interaction)
-                    return
+                    # Try to create fallback state
+                    fallback_view = await self._create_fallback_state(interaction)
+                    if fallback_view:
+                        # Update this view with fallback data
+                        self.outputs = fallback_view.outputs
+                        self.current_index = fallback_view.current_index
+                        self.original_text = fallback_view.original_text
+                        self.original_images = fallback_view.original_images
+                        self.interaction_id = fallback_view.interaction_id
+                        # Try again
+                        if not self.current_output:
+                            await interaction.response.defer()
+                            return
+                    else:
+                        await interaction.response.defer()
+                        return
             else:
-                # Show persistence failure message
-                await self._show_persistence_failure(interaction)
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.outputs = fallback_view.outputs
+                    self.current_index = fallback_view.current_index
+                    self.original_text = fallback_view.original_text
+                    self.original_images = fallback_view.original_images
+                    self.interaction_id = fallback_view.interaction_id
+                    # Try again
+                    if not self.current_output:
+                        await interaction.response.defer()
+                        return
+                else:
+                    await interaction.response.defer()
+                    return
             
         try:
             # Disable all buttons to prevent multiple clicks
@@ -955,24 +1181,132 @@ class ProcessRequestView(discord.ui.View):
             return None
     
     async def _try_restore_from_persistence(self, interaction: discord.Interaction):
-        """Try to restore view state from interaction context."""
+        """Try to restore view state from interaction context with multiple fallback strategies."""
         try:
-            # Try to extract interaction ID from embed or message content
+            # Strategy 1: Extract from embed footer (current format: "Persistent Session ID: {uuid}")
             if hasattr(interaction, 'message') and interaction.message and interaction.message.embeds:
                 embed = interaction.message.embeds[0]
-                # Look for interaction ID in embed footer or custom field
-                if embed.footer and 'ID:' in embed.footer.text:
-                    interaction_id = embed.footer.text.split('ID:')[1].strip()
-                    return self.from_interaction_id(interaction_id)
+                
+                if embed.footer and embed.footer.text:
+                    footer_text = embed.footer.text
+                    # Try current format: "Persistent Session ID: {uuid}"
+                    if 'Persistent Session ID:' in footer_text:
+                        interaction_id = footer_text.split('Persistent Session ID:')[1].strip()
+                        restored_view = self.from_interaction_id(interaction_id)
+                        if restored_view:
+                            return restored_view
                     
-                # Try to find ID in embed fields
+                    # Try legacy format: "ID: {uuid}"
+                    if 'ID:' in footer_text:
+                        interaction_id = footer_text.split('ID:')[1].strip()
+                        restored_view = self.from_interaction_id(interaction_id)
+                        if restored_view:
+                            return restored_view
+                
+                # Strategy 2: Look for ID in embed fields
                 for field in embed.fields:
-                    if 'Interaction ID' in field.name and field.value:
-                        return self.from_interaction_id(field.value.strip())
+                    if field.name and field.value:
+                        if 'Interaction ID' in field.name or 'Session ID' in field.name:
+                            restored_view = self.from_interaction_id(field.value.strip())
+                            if restored_view:
+                                return restored_view
+                
+                # Strategy 3: Extract UUID pattern from any embed text
+                import re
+                uuid_pattern = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                
+                # Check title, description, footer
+                text_sources = []
+                if embed.title:
+                    text_sources.append(embed.title)
+                if embed.description:
+                    text_sources.append(embed.description)
+                if embed.footer and embed.footer.text:
+                    text_sources.append(embed.footer.text)
+                
+                for text in text_sources:
+                    matches = re.findall(uuid_pattern, text, re.IGNORECASE)
+                    for match in matches:
+                        restored_view = self.from_interaction_id(match)
+                        if restored_view:
+                            return restored_view
+            
+            # Strategy 4: Try to extract from message content if it exists
+            if hasattr(interaction, 'message') and interaction.message and interaction.message.content:
+                import re
+                uuid_pattern = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                matches = re.findall(uuid_pattern, interaction.message.content, re.IGNORECASE)
+                for match in matches:
+                    restored_view = self.from_interaction_id(match)
+                    if restored_view:
+                        return restored_view
             
             return None
         except Exception as e:
             logger.error(f"Error trying to restore from persistence: {e}")
+            return None
+    
+    async def _create_fallback_state(self, interaction: discord.Interaction):
+        """Create a minimal working state when persistence completely fails."""
+        try:
+            # Generate a new interaction ID for this fallback session
+            persistence_manager = get_persistence_manager()
+            fallback_id = persistence_manager.generate_interaction_id()
+            
+            # Try to extract any useful information from the message
+            prompt_text = "Generated image"
+            if hasattr(interaction, 'message') and interaction.message:
+                if interaction.message.embeds:
+                    embed = interaction.message.embeds[0]
+                    # Look for any prompt information in embed fields
+                    for field in embed.fields:
+                        if field.name and 'prompt' in field.name.lower() and field.value:
+                            prompt_text = field.value
+                            break
+                    # Also check title and description
+                    if embed.description and len(embed.description.strip()) > 0:
+                        prompt_text = embed.description[:200]  # Take first 200 chars
+                
+                # Try to download any images attached to the message
+                image_attachments = []
+                if interaction.message.attachments:
+                    from PIL import Image
+                    for attachment in interaction.message.attachments[:3]:  # Limit to 3 images
+                        if attachment.content_type and attachment.content_type.startswith('image/'):
+                            try:
+                                image_data = await attachment.read()
+                                image = Image.open(io.BytesIO(image_data))
+                                image_attachments.append(image)
+                            except Exception as e:
+                                logger.warning(f"Failed to download attachment: {e}")
+            
+            # Create a minimal working view with the extracted information
+            if len(image_attachments) > 0:
+                # If we found images, create a process view with them
+                fallback_view = ProcessRequestView(
+                    text_content=prompt_text,
+                    images=image_attachments,
+                    existing_outputs=[],
+                    interaction_id=fallback_id
+                )
+                fallback_view._save_state()  # Save the new state
+                return fallback_view
+            else:
+                # No images found, create minimal text-only state
+                logger.info(f"Creating minimal fallback state for interaction without images")
+                if prompt_text != "Generated image":  # We found some text content
+                    fallback_view = ProcessRequestView(
+                        text_content=prompt_text,
+                        images=[],
+                        existing_outputs=[],
+                        interaction_id=fallback_id
+                    )
+                    fallback_view._save_state()
+                    return fallback_view
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to create fallback state: {e}")
             return None
         
     @discord.ui.button(label='🎨 Process Prompt', style=discord.ButtonStyle.primary, custom_id='process_request_button')
@@ -994,28 +1328,35 @@ class ProcessRequestView(discord.ui.View):
                 await self._process_request(interaction, button)
                 return
             else:
-                # Show persistence failure message
-                embed = discord.Embed(
-                    title="⚠️ Interaction Expired - Nano Banana Bot",
-                    description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
-                    color=0xff9900
-                )
-                embed.add_field(
-                    name="What happened?", 
-                    value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
-                    inline=False
-                )
-                embed.add_field(
-                    name="How to fix this?", 
-                    value="Simply mention the bot again with your prompt to start a new generation.", 
-                    inline=False
-                )
-                
-                try:
-                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-                except discord.InteractionResponse:
-                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.text_content = fallback_view.text_content
+                    self.images = fallback_view.images
+                    self.original_text = fallback_view.original_text
+                    self.existing_outputs = fallback_view.existing_outputs
+                    self.interaction_id = fallback_view.interaction_id
+                    # Continue with processing
+                    await self._process_request(interaction, button)
+                    return
+                else:
+                    # Last resort: show a helpful message to re-initiate
+                    embed = discord.Embed(
+                        title="🔄 Session Recovery - Nano Banana Bot",
+                        description="Please mention the bot again with your prompt to continue generating images.",
+                        color=0x0099ff
+                    )
+                    embed.add_field(
+                        name="How to continue", 
+                        value="Simply type `@NanoBanana your prompt here` with any images you want to use.", 
+                        inline=False
+                    )
+                    try:
+                        await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                    except discord.InteractionResponse:
+                        await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                    return
             
         await self._process_request(interaction, button)
     
@@ -1036,28 +1377,33 @@ class ProcessRequestView(discord.ui.View):
                 self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
                 # Continue with edit prompt
             else:
-                # Show persistence failure message
-                embed = discord.Embed(
-                    title="⚠️ Interaction Expired - Nano Banana Bot",
-                    description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
-                    color=0xff9900
-                )
-                embed.add_field(
-                    name="What happened?", 
-                    value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
-                    inline=False
-                )
-                embed.add_field(
-                    name="How to fix this?", 
-                    value="Simply mention the bot again with your prompt to start a new generation.", 
-                    inline=False
-                )
-                
-                try:
-                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-                except discord.InteractionResponse:
-                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.text_content = fallback_view.text_content
+                    self.images = fallback_view.images
+                    self.original_text = fallback_view.original_text
+                    self.existing_outputs = fallback_view.existing_outputs
+                    self.interaction_id = fallback_view.interaction_id
+                    # Continue with edit prompt
+                else:
+                    # Last resort: show a helpful message to re-initiate
+                    embed = discord.Embed(
+                        title="🔄 Session Recovery - Nano Banana Bot",
+                        description="Please mention the bot again with your prompt to continue generating images.",
+                        color=0x0099ff
+                    )
+                    embed.add_field(
+                        name="How to continue", 
+                        value="Simply type `@NanoBanana your prompt here` with any images you want to use.", 
+                        inline=False
+                    )
+                    try:
+                        await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                    except discord.InteractionResponse:
+                        await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                    return
             
         modal = PromptModal(self.text_content, "Edit Prompt")
         await interaction.response.send_modal(modal)
@@ -1114,28 +1460,33 @@ class ProcessRequestView(discord.ui.View):
                 self._original_image_paths = getattr(restored_view, '_original_image_paths', [])
                 # Continue with style application
             else:
-                # Show persistence failure message
-                embed = discord.Embed(
-                    title="⚠️ Interaction Expired - Nano Banana Bot",
-                    description="This interaction is no longer available because the bot was restarted and the interaction data could not be restored.\n\nPlease create a new image generation request to continue.",
-                    color=0xff9900
-                )
-                embed.add_field(
-                    name="What happened?", 
-                    value="Button interactions on messages sent before a bot restart cannot access the original request data.", 
-                    inline=False
-                )
-                embed.add_field(
-                    name="How to fix this?", 
-                    value="Simply mention the bot again with your prompt to start a new generation.", 
-                    inline=False
-                )
-                
-                try:
-                    await interaction.response.edit_message(embed=embed, view=None, attachments=[])
-                except discord.InteractionResponse:
-                    await interaction.edit_original_response(embed=embed, view=None, attachments=[])
-                return
+                # Try to create fallback state
+                fallback_view = await self._create_fallback_state(interaction)
+                if fallback_view:
+                    # Update this view with fallback data
+                    self.text_content = fallback_view.text_content
+                    self.images = fallback_view.images
+                    self.original_text = fallback_view.original_text
+                    self.existing_outputs = fallback_view.existing_outputs
+                    self.interaction_id = fallback_view.interaction_id
+                    # Continue with style application
+                else:
+                    # Last resort: show a helpful message to re-initiate
+                    embed = discord.Embed(
+                        title="🔄 Session Recovery - Nano Banana Bot",
+                        description="Please mention the bot again with your prompt to continue generating images.",
+                        color=0x0099ff
+                    )
+                    embed.add_field(
+                        name="How to continue", 
+                        value="Simply type `@NanoBanana your prompt here` with any images you want to use.", 
+                        inline=False
+                    )
+                    try:
+                        await interaction.response.edit_message(embed=embed, view=None, attachments=[])
+                    except discord.InteractionResponse:
+                        await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                    return
             
         # Apply the selected template
         self._apply_template(style_key)
