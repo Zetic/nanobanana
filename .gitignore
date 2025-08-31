@@ -41,6 +41,10 @@ input_images/
 *.gif
 !example_images/
 
+# Job persistence (runtime data)
+jobs/
+jobs.json
+
 # Logs
 *.log
 
