@@ -58,7 +58,7 @@ class ProcessStyleSelect(discord.ui.Select):
         for style_key, style_data in config.TEMPLATES.items():
             options.append(discord.SelectOption(
                 label=style_data['name'],
-                description=style_data['image_only'][:100],  # Truncate description
+                description=style_data['template'][:100],  # Truncate description
                 emoji=style_data['emoji'],
                 value=style_key
             ))
@@ -87,7 +87,7 @@ class StyleSelect(discord.ui.Select):
         for style_key, style_data in config.TEMPLATES.items():
             options.append(discord.SelectOption(
                 label=style_data['name'],
-                description=style_data['image_only'][:100],  # Truncate description
+                description=style_data['template'][:100],  # Truncate description
                 emoji=style_data['emoji'],
                 value=style_key
             ))
@@ -624,7 +624,7 @@ class StyleOptionsView(discord.ui.View):
                 return
                 
             style_name = style_template['name']
-            style_prompt = style_template['image_only']
+            style_prompt = style_template['template']
             
             # Update embed to show processing (using consistent embed style)
             embed = discord.Embed(
@@ -1055,16 +1055,8 @@ class ProcessRequestView(discord.ui.View):
             
         template = config.TEMPLATES[template_name]
         
-        if self.images and self.original_text.strip():
-            # Image + text case
-            self.text_content = template['image_and_text'].format(text=self.original_text)
-        elif self.images:
-            # Image only case
-            self.text_content = template['image_only']
-        else:
-            # Text only case - use original text or a default if empty
-            text_to_use = self.original_text.strip() or "an image"
-            self.text_content = template['text_only'].format(text=text_to_use)
+        # Simply replace the text content with the template
+        self.text_content = template['template']
     
     async def _process_request(self, interaction: discord.Interaction, button: discord.ui.Button = None, is_template_applied: bool = False):
         """Handle the actual image processing."""
@@ -1362,13 +1354,7 @@ async def handle_generation_request(message):
             text_content = "A banana"
             logger.info("No text provided, using default prompt: 'A banana'")
         
-        # Delete the original message after processing inputs
-        try:
-            await message.delete()
-            logger.info("Deleted original user message")
-        except Exception as e:
-            logger.warning(f"Could not delete original message: {e}")
-            # Continue processing even if deletion fails
+        # Keep the original message (no longer deleting it)
         
         # Don't create any OutputItems for initial uploads - show images directly in embed
         input_outputs = []
