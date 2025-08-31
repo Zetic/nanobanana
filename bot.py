@@ -1427,6 +1427,73 @@ async def handle_generation_request(message):
         else:
             logger.info(f"No images found, will do text-to-image generation with prompt: '{text_content}'")
         
+        # Check if this is a reply to bot's message with images - if so, auto-process
+        is_reply_to_bot_with_images = (
+            message.reference and 
+            message.reference.message_id and 
+            images and  # We extracted images from the bot's message
+            len([img for img in images]) > 0  # We have actual images to process
+        )
+        
+        if is_reply_to_bot_with_images:
+            logger.info("Auto-processing reply to bot message with extracted images")
+            # Auto-process the image transformation
+            try:
+                await status_msg.edit(content="🎨 Processing your image transformation...")
+                
+                # Get the image generator
+                generator = get_image_generator()
+                
+                # Generate the image directly
+                if len(images) == 1:
+                    generated_image = await generator.generate_image_from_image(images[0], text_content)
+                else:
+                    # Use stitched image for multiple images
+                    stitched_image = create_stitched_image(images)
+                    generated_image = await generator.generate_image_from_image(stitched_image, text_content)
+                
+                if generated_image:
+                    # Create output and send result
+                    from genai_client import OutputItem
+                    import datetime
+                    
+                    filename = f"generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    output = OutputItem(generated_image, text_content, filename)
+                    
+                    # Create final embed
+                    embed = discord.Embed(
+                        title=f"🎨 Generated Image - {bot.user.display_name}",
+                        color=0x00ff00
+                    )
+                    embed.add_field(name="Prompt used:", value=f"{text_content[:100]}{'...' if len(text_content) > 100 else ''}", inline=False)
+                    embed.add_field(name="Source:", value=f"Reply to bot message with {len(images)} image(s)", inline=False)
+                    
+                    # Send result
+                    import io
+                    img_buffer = io.BytesIO()
+                    generated_image.save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+                    file = discord.File(img_buffer, filename=filename)
+                    embed.set_image(url=f"attachment://{filename}")
+                    
+                    # Create style options view for further modifications
+                    style_view = StyleOptionsView([output], 0, text_content, images)
+                    
+                    await status_msg.edit(content=None, embed=embed, view=style_view, attachments=[file])
+                    await message.add_reaction('✅')
+                    logger.info(f"Successfully auto-processed reply to bot message")
+                    return
+                else:
+                    logger.error("Failed to generate image in auto-process mode")
+                    await status_msg.edit(content="❌ Failed to process image. Please try again.")
+                    await message.add_reaction('❌')
+                    return
+                    
+            except Exception as e:
+                logger.error(f"Error in auto-processing: {e}")
+                await status_msg.edit(content="❌ Error processing image. Showing manual options below.")
+                # Fall through to manual processing view
+        
         # Keep the original message (no longer deleting it)
         
         # Don't create any OutputItems for initial uploads - show images directly in embed
