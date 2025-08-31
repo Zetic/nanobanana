@@ -512,6 +512,11 @@ class StyleOptionsView(discord.ui.View):
     
     async def apply_style(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style to the generated image."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.outputs:
+            await self._handle_missing_context(interaction, "apply styles")
+            return
+            
         if not self.current_output:
             return
             
@@ -719,6 +724,11 @@ class ProcessRequestView(discord.ui.View):
     
     async def apply_style_and_process(self, interaction: discord.Interaction, style_key: str):
         """Apply selected style template and process."""
+        # Check if this is a persistent view with no context (after restart)
+        if not self.text_content and not self.images:
+            await self._handle_missing_context(interaction, "apply styles and process")
+            return
+            
         # Apply the selected template
         self._apply_template(style_key)
         
