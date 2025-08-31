@@ -1330,11 +1330,37 @@ async def handle_generation_request(message):
                     else:
                         logger.warning(f"Image too large: {attachment.filename} ({attachment.size} bytes)")
         
-        # Validate that we have either text or images (or both)
-        if not text_content and not images:
-            await status_msg.edit(content="❌ Please provide either text, images, or both for generation.")
-            await message.add_reaction('❌')
-            return
+        # Check if this is a reply and extract images from the referenced message
+        if message.reference and message.reference.message_id:
+            try:
+                # Fetch the referenced message
+                channel = message.channel
+                referenced_message = await channel.fetch_message(message.reference.message_id)
+                
+                # Extract images from the referenced message
+                if referenced_message.attachments:
+                    await status_msg.edit(content="📥 Downloading images from reply...")
+                    for attachment in referenced_message.attachments[:config.MAX_IMAGES - len(images)]:
+                        if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+                            if attachment.size <= config.MAX_IMAGE_SIZE:
+                                image = await download_image(attachment.url)
+                                if image:
+                                    images.append(image)
+                                    logger.info(f"Downloaded image from reply: {attachment.filename}")
+                            else:
+                                logger.warning(f"Image too large in reply: {attachment.filename} ({attachment.size} bytes)")
+                        
+                        # Stop if we've reached the maximum number of images
+                        if len(images) >= config.MAX_IMAGES:
+                            break
+                            
+            except Exception as e:
+                logger.warning(f"Could not fetch referenced message: {e}")
+        
+        # Set default text if no text content provided
+        if not text_content:
+            text_content = "A banana"
+            logger.info("No text provided, using default prompt: 'A banana'")
         
         # Delete the original message after processing inputs
         try:
