@@ -217,10 +217,11 @@ class StyleOptionsView(discord.ui.View):
         for item in self.children:
             item.disabled = True
             
-        # Determine images to use - use original images if we have them  
+        # Determine images to use - only use multiple original images when viewing a stitched preview
         images_to_use = [self.current_output.image]
-        if self.original_images and len(self.original_images) > 1:
-            # If we have multiple original images, use those instead of the current single output
+        if (self.original_images and len(self.original_images) > 1 and 
+            self.current_output.filename.startswith("stitched_")):
+            # Only use multiple original images when viewing a stitched image preview
             images_to_use = self.original_images
         
         # Update button label to show processing
