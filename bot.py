@@ -772,7 +772,7 @@ class StyleOptionsView(discord.ui.View):
                 
                 # Create embed for this output
                 embed = discord.Embed(
-                    title=f"🕒 Final Output {i + 1}/{len(true_outputs)} (Timed Out)",
+                    title=f"Output {i + 1}/{len(true_outputs)}",
                     color=0xff9900
                 )
                 
@@ -784,37 +784,22 @@ class StyleOptionsView(discord.ui.View):
                         inline=False
                     )
                 
-                # Add timestamp
-                embed.add_field(name="Generated:", value=output.timestamp, inline=True)
-                
                 # Set the image for this embed
                 embed.set_image(url=f"attachment://{timeout_filename}")
-                
-                # Add footer for the first embed
-                if i == 0:
-                    if len(true_outputs) > max_embeds:
-                        embed.set_footer(text=f"Session timed out. Showing {max_embeds} of {len(true_outputs)} outputs.")
-                    else:
-                        embed.set_footer(text="Session timed out. Here are all your outputs.")
                 
                 embeds.append(embed)
             
             # If no outputs were generated, create a single embed indicating that
             if not embeds:
                 embed = discord.Embed(
-                    title="🕒 Session Timed Out",
+                    title="Session Timed Out",
                     description="No outputs were generated during this session.",
                     color=0xff9900
                 )
-                embed.set_footer(text="The interactive session has expired.")
                 embeds.append(embed)
             
-            # Update the original message with all outputs
-            content = "🕒 **Timed out!** Here are all your output images:"
-            if len(true_outputs) > max_embeds:
-                content += f"\n*Showing {max_embeds} of {len(true_outputs)} outputs due to Discord limits.*"
-            elif not true_outputs:
-                content = "🕒 **Timed out!** No images were generated during this session."
+            # Update the original message with all outputs (no content text)
+            content = ""
             
             await self.message.edit(
                 content=content,
