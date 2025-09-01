@@ -16,42 +16,30 @@ class ImageGenerator:
             raise ValueError("GOOGLE_API_KEY not found in environment variables")
         
         self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
-        # Use proper image generation model
-        self.image_model = "imagen-3.0-generate-001"  # Dedicated image generation model
-        self.text_model = "gemini-2.5-flash-image-preview"  # For text+image processing
+        self.model = "gemini-2.5-flash-image-preview"
     
     async def generate_image_from_text(self, prompt: str) -> Optional[Image.Image]:
         """Generate an image from text prompt only."""
         try:
-            # First try the dedicated image generation API
-            response = self.client.models.generate_images(
-                model=self.image_model,
-                prompt=prompt,
+            # Make the prompt explicit about wanting an image generated
+            enhanced_prompt = f"Create a picture of: {prompt}"
+            
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[enhanced_prompt],
             )
             
-            return self._extract_image_from_generate_images_response(response)
+            return self._extract_image_from_response(response)
             
         except Exception as e:
-            logger.warning(f"Image generation API failed: {e}. Falling back to content generation.")
-            # Fallback to content generation with explicit image request
-            try:
-                enhanced_prompt = f"Generate an image of: {prompt}"
-                response = self.client.models.generate_content(
-                    model=self.text_model,
-                    contents=[enhanced_prompt],
-                )
-                
-                return self._extract_image_from_response(response)
-                
-            except Exception as fallback_error:
-                logger.error(f"Error generating image from text (fallback also failed): {fallback_error}")
-                return None
+            logger.error(f"Error generating image from text: {e}")
+            return None
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Optional[Image.Image]:
         """Generate an image from both text prompt and input image."""
         try:
             response = self.client.models.generate_content(
-                model=self.text_model,
+                model=self.model,
                 contents=[prompt, input_image],
             )
             
@@ -68,7 +56,7 @@ class ImageGenerator:
             generic_prompt = "Transform and enhance this image creatively while maintaining its core subject and essence."
             
             response = self.client.models.generate_content(
-                model=self.text_model,
+                model=self.model,
                 contents=[generic_prompt, input_image],
             )
             
@@ -102,7 +90,7 @@ class ImageGenerator:
                 contents.append(image_part)
             
             response = self.client.models.generate_content(
-                model=self.text_model,
+                model=self.model,
                 contents=contents,
             )
             
@@ -133,7 +121,7 @@ class ImageGenerator:
                 contents.append(image_part)
             
             response = self.client.models.generate_content(
-                model=self.text_model,
+                model=self.model,
                 contents=contents,
             )
             
@@ -144,7 +132,7 @@ class ImageGenerator:
             return None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
-        """Extract image from GenAI content generation response (for text+image processing)."""
+        """Extract image from GenAI response."""
         try:
             for part in response.candidates[0].content.parts:
                 if part.text is not None:
@@ -158,37 +146,4 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error extracting image from response: {e}")
-            return None
-    
-    def _extract_image_from_generate_images_response(self, response) -> Optional[Image.Image]:
-        """Extract image from GenAI image generation response."""
-        try:
-            if hasattr(response, 'generated_images') and response.generated_images:
-                # Get the first generated image
-                first_generated_image = response.generated_images[0]
-                if hasattr(first_generated_image, 'image') and first_generated_image.image:
-                    image_obj = first_generated_image.image
-                    if hasattr(image_obj, 'image_bytes') and image_obj.image_bytes:
-                        # Convert bytes to PIL Image
-                        return Image.open(io.BytesIO(image_obj.image_bytes))
-                    else:
-                        logger.error(f"Image object has no image_bytes: {dir(image_obj)}")
-                        return None
-                else:
-                    logger.error(f"GeneratedImage has no image: {dir(first_generated_image)}")
-                    return None
-            elif hasattr(response, 'images') and response.images:
-                # Alternative: direct images list
-                first_image = response.images[0]
-                if hasattr(first_image, 'image_bytes'):
-                    return Image.open(io.BytesIO(first_image.image_bytes))
-                else:
-                    logger.error(f"Unknown image format in images list: {dir(first_image)}")
-                    return None
-            else:
-                logger.warning("No generated_images or images found in GenerateImagesResponse")
-                return None
-            
-        except Exception as e:
-            logger.error(f"Error extracting image from GenerateImagesResponse: {e}")
             return None
