@@ -263,22 +263,23 @@ class StyleOptionsView(discord.ui.View):
         try:
             # Generate the image based on available inputs
             generated_image = None
+            genai_text_response = None
             if self.original_text and self.original_text.strip():
                 # Text + Image(s) case
                 if len(images_to_use) == 1:
-                    generated_image = await get_image_generator().generate_image_from_text_and_image(
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_text_and_image(
                         self.original_text, images_to_use[0]
                     )
                 else:
-                    generated_image = await get_image_generator().generate_image_from_text_and_images(
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_text_and_images(
                         self.original_text, images_to_use
                     )
             else:
                 # Image(s) only case - no text provided
                 if len(images_to_use) == 1:
-                    generated_image = await get_image_generator().generate_image_from_image_only(images_to_use[0])
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_image_only(images_to_use[0])
                 else:
-                    generated_image = await get_image_generator().generate_image_from_images_only(images_to_use)
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_images_only(images_to_use)
             
             if generated_image:
                 # Save the generated image
@@ -347,7 +348,7 @@ class StyleOptionsView(discord.ui.View):
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
-                    title="❌ Generation Failed - Nano Banana Bot",
+                    title="Generation Failed - Nano Banana Bot",
                     color=0xff0000
                 )
                 
@@ -357,20 +358,50 @@ class StyleOptionsView(discord.ui.View):
                 else:
                     embed.description = f"**Failed:** Image transformation with {len(images_to_use)} input image(s)"
                 
-                embed.add_field(name="Status", value="❌ Failed to generate image. Please try again.", inline=False)
+                # Create failure message - include genai text response if available
+                failure_message = "Failed to generate image. Please try again."
+                if genai_text_response and genai_text_response.strip():
+                    failure_message = f"No image was generated, but here's the AI response: {genai_text_response[:200]}{'...' if len(genai_text_response) > 200 else ''}"
+                
+                embed.add_field(name="Status", value=failure_message, inline=False)
                 await interaction.edit_original_response(embed=embed, view=None)
+                
+                # Send ephemeral failure message to user
+                try:
+                    if genai_text_response and genai_text_response.strip():
+                        await interaction.followup.send(
+                            f"No image was generated, but here's the AI response: {genai_text_response}", 
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.followup.send(
+                            "Failed to generate image. Please try again.", 
+                            ephemeral=True
+                        )
+                except:
+                    pass  # In case followup fails
+                
                 logger.error("Failed to generate image")
                 
         except Exception as e:
             logger.error(f"Error processing request: {e}")
             # Update embed to show error
             embed = discord.Embed(
-                title="❌ Error - Nano Banana Bot",
+                title="Error - Nano Banana Bot",
                 description="An error occurred while processing your request.",
                 color=0xff0000
             )
-            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            embed.add_field(name="Status", value="Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+            
+            # Send ephemeral error message to user
+            try:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again later.", 
+                    ephemeral=True
+                )
+            except:
+                pass  # In case followup fails
     
     
     async def _process_add_image(self, interaction: discord.Interaction, message, instruction_msg):
@@ -386,7 +417,7 @@ class StyleOptionsView(discord.ui.View):
                 if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                     if attachment.size > config.MAX_IMAGE_SIZE:
                         await interaction.followup.send(
-                            f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
+                            f"Unable to process request - Maximum size per image is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
                             ephemeral=True
                         )
                         return
@@ -395,11 +426,11 @@ class StyleOptionsView(discord.ui.View):
                     if new_image:
                         new_images.append(new_image)
                     else:
-                        await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                        await interaction.followup.send("Failed to download image. Please try again.", ephemeral=True)
                         return
             
             if not new_images:
-                await interaction.followup.send("❌ **No valid images found** - Please try again.", ephemeral=True)
+                await interaction.followup.send("No valid images found. Please try again.", ephemeral=True)
                 return
             
             # Determine source images for the current output
@@ -447,7 +478,7 @@ class StyleOptionsView(discord.ui.View):
             
         except Exception as e:
             logger.error(f"Error processing added image: {e}")
-            await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
+            await interaction.followup.send("Error processing image. Please try again.", ephemeral=True)
     
     def _get_source_images_for_current_output(self):
         """Get the source images for the current output."""
@@ -580,7 +611,7 @@ class StyleOptionsView(discord.ui.View):
         
         # Send instructions to user for uploading an image
         instruction_msg = await interaction.followup.send(
-            "📎 **Upload image(s) now**", 
+            "📎 Ready to accept new image uploads... Add image(s) by uploading to this channel now.", 
             ephemeral=True
         )
         
@@ -648,7 +679,7 @@ class StyleOptionsView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self, attachments=[file])
             
             # Generate new image with selected style
-            styled_image = await get_image_generator().generate_image_from_text_and_image(
+            styled_image, genai_text_response = await get_image_generator().generate_image_from_text_and_image(
                 style_prompt, self.current_output.image
             )
             
@@ -712,24 +743,43 @@ class StyleOptionsView(discord.ui.View):
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
-                    title="❌ Generation Failed - Nano Banana Bot",
+                    title="Generation Failed - Nano Banana Bot",
                     description=f"Failed to apply {style_name.lower()} style to the image.",
                     color=0xff0000
                 )
-                embed.add_field(name="Status", value="❌ Please try again.", inline=False)
+                embed.add_field(name="Status", value="Please try again.", inline=False)
                 await interaction.edit_original_response(embed=embed, view=None)
+                
+                # Send ephemeral failure message to user
+                try:
+                    await interaction.followup.send(
+                        f"Failed to apply {style_name.lower()} style to the image. Please try again.", 
+                        ephemeral=True
+                    )
+                except:
+                    pass  # In case followup fails
+                
                 logger.error(f"Failed to apply {style_name} style")
                 
         except Exception as e:
             logger.error(f"Error applying {style_key} style: {e}")
             # Update embed to show error
             embed = discord.Embed(
-                title="❌ Error - Nano Banana Bot",
+                title="Error - Nano Banana Bot",
                 description="An error occurred while processing your request.",
                 color=0xff0000
             )
-            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            embed.add_field(name="Status", value="Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+            
+            # Send ephemeral error message to user
+            try:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again later.", 
+                    ephemeral=True
+                )
+            except:
+                pass  # In case followup fails
     
     async def on_timeout(self):
         """Called when the view times out."""
@@ -883,7 +933,7 @@ class ProcessRequestView(discord.ui.View):
         
         # Send instructions to user for uploading an image
         instruction_msg = await interaction.followup.send(
-            "📎 **Upload image(s) now**", 
+            "📎 Ready to accept new image uploads... Add image(s) by uploading to this channel now.", 
             ephemeral=True
         )
         
@@ -924,7 +974,7 @@ class ProcessRequestView(discord.ui.View):
                 if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                     if attachment.size > config.MAX_IMAGE_SIZE:
                         await interaction.followup.send(
-                            f"❌ **Image too large** - Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
+                            f"Unable to process request - Maximum size per image is {config.MAX_IMAGE_SIZE // (1024*1024)}MB", 
                             ephemeral=True
                         )
                         return
@@ -933,11 +983,11 @@ class ProcessRequestView(discord.ui.View):
                     if new_image:
                         new_images.append(new_image)
                     else:
-                        await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                        await interaction.followup.send("Failed to download image. Please try again.", ephemeral=True)
                         return
             
             if not new_images:
-                await interaction.followup.send("❌ **No valid images found** - Please try again.", ephemeral=True)
+                await interaction.followup.send("No valid images found. Please try again.", ephemeral=True)
                 return
             
             # Add the images to the request
@@ -960,7 +1010,7 @@ class ProcessRequestView(discord.ui.View):
             
         except Exception as e:
             logger.error(f"Error adding image to request: {e}")
-            await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
+            await interaction.followup.send("Error processing image. Please try again.", ephemeral=True)
     
     async def _update_request_display_after_add(self, interaction: discord.Interaction):
         """Update the request display after adding an image."""
@@ -1119,25 +1169,26 @@ class ProcessRequestView(discord.ui.View):
             
             # Generate the image based on available inputs
             generated_image = None
+            genai_text_response = None
             if self.images and self.text_content.strip():
                 # Text + Image(s) case
                 if len(self.images) == 1:
-                    generated_image = await get_image_generator().generate_image_from_text_and_image(
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_text_and_image(
                         self.text_content, self.images[0]
                     )
                 else:
-                    generated_image = await get_image_generator().generate_image_from_text_and_images(
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_text_and_images(
                         self.text_content, self.images
                     )
             elif self.images:
                 # Image(s) only case - no text provided
                 if len(self.images) == 1:
-                    generated_image = await get_image_generator().generate_image_from_image_only(self.images[0])
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_image_only(self.images[0])
                 else:
-                    generated_image = await get_image_generator().generate_image_from_images_only(self.images)
+                    generated_image, genai_text_response = await get_image_generator().generate_image_from_images_only(self.images)
             elif self.text_content.strip():
                 # Text only case
-                generated_image = await get_image_generator().generate_image_from_text(self.text_content)
+                generated_image, genai_text_response = await get_image_generator().generate_image_from_text(self.text_content)
             else:
                 # This shouldn't happen due to validation, but handle gracefully
                 logger.error("No text content or images provided for generation")
@@ -1212,7 +1263,7 @@ class ProcessRequestView(discord.ui.View):
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
-                    title="❌ Generation Failed - Nano Banana Bot",
+                    title="Generation Failed - Nano Banana Bot",
                     color=0xff0000
                 )
                 
@@ -1224,20 +1275,50 @@ class ProcessRequestView(discord.ui.View):
                 elif self.images:
                     embed.description = f"**Failed:** Image transformation with {len(self.images)} input image(s)"
                 
-                embed.add_field(name="Status", value="❌ Failed to generate image. Please try again.", inline=False)
+                # Create failure message - include genai text response if available
+                failure_message = "Failed to generate image. Please try again."
+                if genai_text_response and genai_text_response.strip():
+                    failure_message = f"No image was generated, but here's the AI response: {genai_text_response[:200]}{'...' if len(genai_text_response) > 200 else ''}"
+                
+                embed.add_field(name="Status", value=failure_message, inline=False)
                 await interaction.edit_original_response(embed=embed, view=None)
+                
+                # Send ephemeral failure message to user
+                try:
+                    if genai_text_response and genai_text_response.strip():
+                        await interaction.followup.send(
+                            f"No image was generated, but here's the AI response: {genai_text_response}", 
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.followup.send(
+                            "Failed to generate image. Please try again.", 
+                            ephemeral=True
+                        )
+                except:
+                    pass  # In case followup fails
+                
                 logger.error("Failed to generate image")
                 
         except Exception as e:
             logger.error(f"Error processing request: {e}")
             # Update embed to show error
             embed = discord.Embed(
-                title="❌ Error - Nano Banana Bot",
+                title="Error - Nano Banana Bot",
                 description="An error occurred while processing your request.",
                 color=0xff0000
             )
-            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            embed.add_field(name="Status", value="Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+            
+            # Send ephemeral error message to user
+            try:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again later.", 
+                    ephemeral=True
+                )
+            except:
+                pass  # In case followup fails
     
     async def on_timeout(self):
         """Called when the view times out."""
@@ -1582,24 +1663,25 @@ async def handle_generation_request(message):
                 
                 # Generate the image based on available inputs
                 generated_image = None
+                genai_text_response = None
                 if images and final_text_content.strip():
                     # Text + Image(s) case
                     if len(images) == 1:
-                        generated_image = await generator.generate_image_from_text_and_image(final_text_content, images[0])
+                        generated_image, genai_text_response = await generator.generate_image_from_text_and_image(final_text_content, images[0])
                     else:
-                        generated_image = await generator.generate_image_from_text_and_images(final_text_content, images)
+                        generated_image, genai_text_response = await generator.generate_image_from_text_and_images(final_text_content, images)
                 elif images:
                     # Image(s) only case - no text provided
                     if len(images) == 1:
-                        generated_image = await generator.generate_image_from_image_only(images[0])
+                        generated_image, genai_text_response = await generator.generate_image_from_image_only(images[0])
                     else:
-                        generated_image = await generator.generate_image_from_images_only(images)
+                        generated_image, genai_text_response = await generator.generate_image_from_images_only(images)
                 elif final_text_content.strip():
                     # Text only case
-                    generated_image = await generator.generate_image_from_text(final_text_content)
+                    generated_image, genai_text_response = await generator.generate_image_from_text(final_text_content)
                 else:
                     logger.error("No valid inputs for generation in auto-process mode")
-                    await status_msg.edit(content="❌ No valid inputs for processing. Please try again.")
+                    await status_msg.edit(content="No valid inputs for processing. Please try again.")
                     await message.add_reaction('❌')
                     return
                 
@@ -1649,13 +1731,18 @@ async def handle_generation_request(message):
                     return
                 else:
                     logger.error("Failed to generate image in auto-process mode")
-                    await status_msg.edit(content="❌ Failed to process image. Please try again.")
+                    # Send ephemeral message to user with more details
+                    if genai_text_response and genai_text_response.strip():
+                        failure_msg = f"No image was generated, but here's the AI response: {genai_text_response}"
+                        await status_msg.edit(content=failure_msg)
+                    else:
+                        await status_msg.edit(content="Failed to process image. Please try again.")
                     await message.add_reaction('❌')
                     return
                     
             except Exception as e:
                 logger.error(f"Error in auto-processing: {e}")
-                await status_msg.edit(content="❌ Error processing image. Showing manual options below.")
+                await status_msg.edit(content="Error processing image. Showing manual options below.")
                 # Fall through to manual processing view
         
         # Show manual processing view for non-auto-process cases
@@ -1726,7 +1813,7 @@ async def handle_generation_request(message):
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
         try:
-            await message.reply("❌ An error occurred while processing your request. Please try again.")
+            await message.reply("An error occurred while processing your request. Please try again.")
             await message.add_reaction('❌')
         except:
             pass
