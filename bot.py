@@ -387,12 +387,21 @@ class StyleOptionsView(discord.ui.View):
             logger.error(f"Error processing request: {e}")
             # Update embed to show error
             embed = discord.Embed(
-                title="❌ Error - Nano Banana Bot",
+                title="Error - Nano Banana Bot",
                 description="An error occurred while processing your request.",
                 color=0xff0000
             )
-            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            embed.add_field(name="Status", value="Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+            
+            # Send ephemeral error message to user
+            try:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again later.", 
+                    ephemeral=True
+                )
+            except:
+                pass  # In case followup fails
     
     
     async def _process_add_image(self, interaction: discord.Interaction, message, instruction_msg):
@@ -417,11 +426,11 @@ class StyleOptionsView(discord.ui.View):
                     if new_image:
                         new_images.append(new_image)
                     else:
-                        await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                        await interaction.followup.send("Failed to download image. Please try again.", ephemeral=True)
                         return
             
             if not new_images:
-                await interaction.followup.send("❌ **No valid images found** - Please try again.", ephemeral=True)
+                await interaction.followup.send("No valid images found. Please try again.", ephemeral=True)
                 return
             
             # Determine source images for the current output
@@ -469,7 +478,7 @@ class StyleOptionsView(discord.ui.View):
             
         except Exception as e:
             logger.error(f"Error processing added image: {e}")
-            await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
+            await interaction.followup.send("Error processing image. Please try again.", ephemeral=True)
     
     def _get_source_images_for_current_output(self):
         """Get the source images for the current output."""
@@ -734,24 +743,43 @@ class StyleOptionsView(discord.ui.View):
             else:
                 # Update embed to show failure
                 embed = discord.Embed(
-                    title="❌ Generation Failed - Nano Banana Bot",
+                    title="Generation Failed - Nano Banana Bot",
                     description=f"Failed to apply {style_name.lower()} style to the image.",
                     color=0xff0000
                 )
-                embed.add_field(name="Status", value="❌ Please try again.", inline=False)
+                embed.add_field(name="Status", value="Please try again.", inline=False)
                 await interaction.edit_original_response(embed=embed, view=None)
+                
+                # Send ephemeral failure message to user
+                try:
+                    await interaction.followup.send(
+                        f"Failed to apply {style_name.lower()} style to the image. Please try again.", 
+                        ephemeral=True
+                    )
+                except:
+                    pass  # In case followup fails
+                
                 logger.error(f"Failed to apply {style_name} style")
                 
         except Exception as e:
             logger.error(f"Error applying {style_key} style: {e}")
             # Update embed to show error
             embed = discord.Embed(
-                title="❌ Error - Nano Banana Bot",
+                title="Error - Nano Banana Bot",
                 description="An error occurred while processing your request.",
                 color=0xff0000
             )
-            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            embed.add_field(name="Status", value="Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+            
+            # Send ephemeral error message to user
+            try:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again later.", 
+                    ephemeral=True
+                )
+            except:
+                pass  # In case followup fails
     
     async def on_timeout(self):
         """Called when the view times out."""
@@ -955,11 +983,11 @@ class ProcessRequestView(discord.ui.View):
                     if new_image:
                         new_images.append(new_image)
                     else:
-                        await interaction.followup.send("❌ **Failed to download image** - Please try again.", ephemeral=True)
+                        await interaction.followup.send("Failed to download image. Please try again.", ephemeral=True)
                         return
             
             if not new_images:
-                await interaction.followup.send("❌ **No valid images found** - Please try again.", ephemeral=True)
+                await interaction.followup.send("No valid images found. Please try again.", ephemeral=True)
                 return
             
             # Add the images to the request
@@ -982,7 +1010,7 @@ class ProcessRequestView(discord.ui.View):
             
         except Exception as e:
             logger.error(f"Error adding image to request: {e}")
-            await interaction.followup.send("❌ **Error processing image** - Please try again.", ephemeral=True)
+            await interaction.followup.send("Error processing image. Please try again.", ephemeral=True)
     
     async def _update_request_display_after_add(self, interaction: discord.Interaction):
         """Update the request display after adding an image."""
@@ -1276,12 +1304,21 @@ class ProcessRequestView(discord.ui.View):
             logger.error(f"Error processing request: {e}")
             # Update embed to show error
             embed = discord.Embed(
-                title="❌ Error - Nano Banana Bot",
+                title="Error - Nano Banana Bot",
                 description="An error occurred while processing your request.",
                 color=0xff0000
             )
-            embed.add_field(name="Status", value="❌ Please try again later.", inline=False)
+            embed.add_field(name="Status", value="Please try again later.", inline=False)
             await interaction.edit_original_response(embed=embed, view=None)
+            
+            # Send ephemeral error message to user
+            try:
+                await interaction.followup.send(
+                    "An error occurred while processing your request. Please try again later.", 
+                    ephemeral=True
+                )
+            except:
+                pass  # In case followup fails
     
     async def on_timeout(self):
         """Called when the view times out."""
@@ -1705,7 +1742,7 @@ async def handle_generation_request(message):
                     
             except Exception as e:
                 logger.error(f"Error in auto-processing: {e}")
-                await status_msg.edit(content="❌ Error processing image. Showing manual options below.")
+                await status_msg.edit(content="Error processing image. Showing manual options below.")
                 # Fall through to manual processing view
         
         # Show manual processing view for non-auto-process cases
@@ -1776,7 +1813,7 @@ async def handle_generation_request(message):
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
         try:
-            await message.reply("❌ An error occurred while processing your request. Please try again.")
+            await message.reply("An error occurred while processing your request. Please try again.")
             await message.add_reaction('❌')
         except:
             pass
