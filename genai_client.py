@@ -21,12 +21,27 @@ class ImageGenerator:
     async def generate_image_from_text(self, prompt: str) -> Optional[Image.Image]:
         """Generate an image from text prompt only."""
         try:
+            # First, try with the original prompt
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
             )
             
-            return self._extract_image_from_response(response)
+            result = self._extract_image_from_response(response)
+            
+            # If no image was found (response contained only text), try with enhanced prompt
+            if result is None:
+                logger.info("No image found in initial response, trying with enhanced prompt")
+                enhanced_prompt = f"send an image: {prompt}"
+                
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[enhanced_prompt],
+                )
+                
+                result = self._extract_image_from_response(response)
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error generating image from text: {e}")
