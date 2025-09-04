@@ -21,7 +21,6 @@ class ImageGenerator:
     async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str]]:
         """Generate an image from text prompt only. Returns (image, text_response)."""
         try:
-            # First, try with the original prompt
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
@@ -29,21 +28,6 @@ class ImageGenerator:
             
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
-            
-            # If no image was found (response contained only text), try with enhanced prompt
-            if image is None:
-                logger.info("No image found in initial response, trying with enhanced prompt")
-                enhanced_prompt = f"send an image: {prompt}"
-                
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=[enhanced_prompt],
-                )
-                
-                image = self._extract_image_from_response(response)
-                # Keep the original text response, don't overwrite with enhanced prompt response
-                if text is None:
-                    text = self._extract_text_from_response(response)
             
             return image, text
             
