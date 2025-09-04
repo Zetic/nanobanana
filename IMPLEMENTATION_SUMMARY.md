@@ -1,6 +1,12 @@
-# Prompt Editing Feature Implementation Summary
+# Implementation Documentation (DEPRECATED)
 
-## Changes Made
+⚠️ **NOTE: This documentation describes features that have been removed.**
+
+As of the latest version, the bot has been simplified to return natural API responses instead of using interactive embeds and buttons. The prompt editing functionality described in this file no longer exists.
+
+The bot now responds directly with natural text and/or image outputs from the AI.
+
+## Original Documentation (for reference only)
 
 ### 1. PromptModal Class (New)
 - **Location**: `bot.py` lines 21-40
