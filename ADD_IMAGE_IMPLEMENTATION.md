@@ -1,6 +1,16 @@
-# Add Image Button Implementation Summary - UPDATED
+# Implementation Documentation (DEPRECATED)
 
-## Changes Made
+⚠️ **NOTE: This documentation describes features that have been removed.**
+
+As of the latest version, the bot has been simplified to return natural API responses instead of using interactive embeds and buttons. The functionality described in this file no longer exists.
+
+The bot now:
+- Returns text when the AI generates text
+- Returns images when the AI generates images  
+- Returns both when the AI generates both
+- No longer uses embeds, buttons, or style templates
+
+## Original Documentation (for reference only)
 
 ### 1. StyleOptionsView - Add Image Button **[UPDATED FOR STITCHED IMAGE FIX]**
 **Location**: `bot.py` lines 375-522

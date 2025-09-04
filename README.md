@@ -1,14 +1,13 @@
 # 🍌 Nano Banana Discord Bot
 
-A Discord bot that generates stunning images using Google's Gemini AI image generation capabilities. The bot can create images from text prompts, transform existing images, and process multiple images simultaneously for enhanced AI generation.
+A Discord bot that generates images and text using Google's Gemini AI. The bot returns natural responses from the AI - text when the AI responds with text, images when it responds with images, or both when it responds with both.
 
 ## ✨ Features
 
 - **Text-to-Image Generation**: Create images from descriptive text prompts
-- **Image-to-Image Transformation**: Transform uploaded images using AI
-- **Multi-Image Processing**: Process multiple images simultaneously for enhanced generation
-- **Template Styles**: Apply preset styles like "Sticker" for consistent styling
-- **Chained Modifications**: Apply styles to generated images for iterative improvements
+- **Image-to-Image Transformation**: Transform uploaded images using AI  
+- **Multi-Image Processing**: Process multiple images simultaneously
+- **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
 
@@ -56,9 +55,9 @@ python main.py
 
 ## 🎯 Usage
 
-### Basic Commands
+### Simple Mentions
 
-- **Mention the bot** with a text prompt to generate an image:
+- **Mention the bot** with a text prompt:
   ```
   @Nano Banana Create a nano banana floating in space
   ```
@@ -68,21 +67,15 @@ python main.py
   @Nano Banana Make this cat look cyberpunk (with image attached)
   ```
 
-- **Multiple images** will be processed simultaneously:
+- **Multiple images** can be processed simultaneously:
   ```
   @Nano Banana Combine these into a fantasy scene (with multiple images)
   ```
 
-### Template Styles
-
-The bot includes preset template styles that can be applied to enhance your images:
-
-- **🏷️ Sticker Style**: Creates images with black outlines and vector art style with transparent backgrounds
-  - For text prompts: Converts your text into a sticker design
-  - For images: Transforms images into sticker format
-  - For both: Combines image transformation with text modifications
-
-After any image is generated, you can apply additional styles using the style buttons for chained modifications.
+The bot will respond naturally based on what the AI generates:
+- **Text responses** when the AI provides text
+- **Image responses** when the AI generates images  
+- **Both text and images** when the AI provides both
 
 ### Available Commands
 

@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-from styles import TEMPLATES
 
 # Load environment variables
 load_dotenv()
