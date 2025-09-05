@@ -159,6 +159,18 @@ async def handle_generation_request(message):
 async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
     try:
+        # Check if the request would generate an image and if user is at rate limit
+        # All generation requests potentially create images, so check rate limit first
+        if user and not user.bot:  # Don't rate limit bots
+            can_generate, images_today, remaining = usage_tracker.can_generate_image(user.id)
+            if not can_generate:
+                await response_message.edit(
+                    content=f"🍌 **Daily Image Limit Reached!**\n\n"
+                           f"You've generated {images_today}/5 images today. "
+                           f"Your limit will reset at midnight (UTC). Try again tomorrow!"
+                )
+                return
+        
         # Generate based on available inputs
         generated_image = None
         genai_text_response = None
@@ -266,6 +278,11 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • `{bot_mention} Transform this into cyberpunk style` (with multiple images)
 • Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
 
+**Rate Limits:**
+• **5 images per day** per user (resets at midnight UTC)
+• Use `/limit` to check your daily status
+• Use `/usage` to see overall statistics
+
 **Features:**
 • Text-to-image generation
 • Image-to-image transformation  
@@ -300,6 +317,19 @@ async def usage_slash(interaction: discord.Interaction):
         usage_text += f"• Total Tokens: {total_stats['total_tokens']:,}\n"
         usage_text += f"• Images Generated: {total_stats['total_images_generated']}\n\n"
         
+        # Add personal daily limit status for the user
+        user_id = interaction.user.id
+        can_generate, images_today, remaining = usage_tracker.can_generate_image(user_id)
+        status_emoji = "✅" if can_generate else "❌"
+        usage_text += f"**{status_emoji} Your Daily Status:**\n"
+        usage_text += f"• Images Today: {images_today}/5\n"
+        usage_text += f"• Remaining: {remaining}\n"
+        if not can_generate:
+            usage_text += f"• Status: Daily limit reached! Resets at midnight UTC.\n"
+        else:
+            usage_text += f"• Status: Ready to generate!\n"
+        usage_text += "\n"
+        
         # Add top users (limit to top 10 to avoid message length issues)
         usage_text += "**👑 Top Users by Output Tokens:**\n"
         
@@ -331,6 +361,37 @@ async def usage_slash(interaction: discord.Interaction):
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
         await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+
+
+@bot.tree.command(name='limit', description='Check your daily image generation limit status')
+async def limit_slash(interaction: discord.Interaction):
+    """Check user's daily image generation limit status."""
+    try:
+        user_id = interaction.user.id
+        can_generate, images_today, remaining = usage_tracker.can_generate_image(user_id)
+        
+        status_emoji = "✅" if can_generate else "❌"
+        limit_text = f"**{status_emoji} Daily Image Limit Status**\n\n"
+        limit_text += f"**📸 Today's Usage:**\n"
+        limit_text += f"• Images Generated: {images_today}/5\n"
+        limit_text += f"• Remaining: {remaining}\n\n"
+        
+        if can_generate:
+            if remaining == 5:
+                limit_text += f"**🟢 Ready to go!** You haven't used any images today.\n"
+            else:
+                limit_text += f"**🟡 Good to go!** You have {remaining} image{'s' if remaining != 1 else ''} remaining.\n"
+        else:
+            limit_text += f"**🔴 Daily limit reached!**\n"
+            limit_text += f"Your limit will reset at midnight UTC. Try again tomorrow!\n"
+        
+        limit_text += f"\n*Daily limit: 5 images per user per day*"
+        
+        await interaction.response.send_message(limit_text)
+        
+    except Exception as e:
+        logger.error(f"Error checking user limit: {e}")
+        await interaction.response.send_message("An error occurred while checking your limit status. Please try again.")
 
 
 
