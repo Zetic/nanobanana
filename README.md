@@ -7,6 +7,7 @@ A Discord bot that generates images and text using Google's Gemini AI. The bot r
 - **Text-to-Image Generation**: Create images from descriptive text prompts
 - **Image-to-Image Transformation**: Transform uploaded images using AI  
 - **Multi-Image Processing**: Process multiple images simultaneously
+- **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
@@ -72,10 +73,17 @@ python main.py
   @Nano Banana Combine these into a fantasy scene (with multiple images)
   ```
 
+- **Reply to messages with images** to use those images in your request:
+  ```
+  @Nano Banana make this change (as a reply to a message with images)
+  ```
+
 The bot will respond naturally based on what the AI generates:
 - **Text responses** when the AI provides text
 - **Image responses** when the AI generates images  
 - **Both text and images** when the AI provides both
+
+When you mention the bot in a reply to another message, it will automatically include any images from the original message in addition to any images you attach to your reply.
 
 ### Available Commands
 
