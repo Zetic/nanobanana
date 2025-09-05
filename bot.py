@@ -101,11 +101,21 @@ async def handle_generation_request(message):
                     images.append(image)
                     logger.info(f"Downloaded image: {attachment.filename}")
         
-        # If this is a reply message, also download images from the original message
+        # If this is a reply message, also download images and extract text from the original message
         if message.reference and message.reference.message_id:
             try:
                 # Fetch the original message being replied to
                 original_message = await message.channel.fetch_message(message.reference.message_id)
+                
+                # Extract text content from the original message
+                original_text_content = await extract_text_from_message(original_message)
+                if original_text_content.strip():
+                    # Combine original message text with reply text
+                    if text_content.strip():
+                        text_content = f"{text_content} {original_text_content}"
+                    else:
+                        text_content = original_text_content
+                    logger.info(f"Combined text from original message: {original_text_content}")
                 
                 # Download images from the original message
                 for attachment in original_message.attachments:
@@ -217,13 +227,13 @@ Just mention me ({bot.user.mention}) in a message with your prompt and optionall
 • `{bot.user.mention} Create a nano banana in space`
 • `{bot.user.mention} Make this cat magical` (with image attached)
 • `{bot.user.mention} Transform this into cyberpunk style` (with multiple images)
-• Reply to a message with images: `{bot.user.mention} make this change` (uses images from original message)
+• Reply to a message with images: `{bot.user.mention} make this change` (uses images and text from original message)
 
 **Features:**
 • Text-to-image generation
 • Image-to-image transformation  
 • Multiple image processing
-• Reply message support (uses images from original message)
+• Reply message support (uses images and text from original message)
 • Natural text responses
 • Powered by Google Gemini AI"""
     
