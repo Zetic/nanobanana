@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 import config
-from image_utils import download_image, create_stitched_image
+from image_utils import download_image
 from genai_client import ImageGenerator
 
 # Set up logging
