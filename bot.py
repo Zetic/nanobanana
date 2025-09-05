@@ -12,7 +12,6 @@ import config
 from image_utils import download_image
 from genai_client import ImageGenerator
 from usage_tracker import usage_tracker
-from search_utils import get_news_searcher
 
 # Set up logging
 logging.basicConfig(
@@ -273,7 +272,6 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • Multiple image processing
 • Reply message support (uses images and text from original message)
 • Natural text responses
-• Daily news visualization with /today command
 • Powered by Google Gemini AI"""
     
     await interaction.response.send_message(help_text)
@@ -333,104 +331,6 @@ async def usage_slash(interaction: discord.Interaction):
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
         await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
-
-@bot.tree.command(name='today', description='Generate an image depicting today\'s biggest news')
-async def today_slash(interaction: discord.Interaction):
-    """Generate an image based on today's biggest news (slash command)."""
-    try:
-        # Send immediate response since this may take a while
-        await interaction.response.send_message("🔍 Searching for today's biggest news and generating an image...")
-        
-        # Search for today's news
-        try:
-            news_searcher = get_news_searcher()
-            news_items = await news_searcher.search_today_news()
-            
-            if not news_items:
-                await interaction.edit_original_response(content="❌ Unable to find today's news. Please check the search configuration or try again later.")
-                return
-            
-            # Format news into image prompt
-            image_prompt = news_searcher.format_news_for_image_prompt(news_items)
-            
-            # Generate image using the existing image generation system
-            generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(image_prompt)
-            
-            # Track usage if we have metadata
-            if usage_metadata and interaction.user and not interaction.user.bot:
-                try:
-                    prompt_tokens = usage_metadata.get("prompt_token_count", 0)
-                    output_tokens = usage_metadata.get("candidates_token_count", 0)
-                    total_tokens = usage_metadata.get("total_token_count", 0)
-                    images_generated = 1 if generated_image else 0
-                    
-                    usage_tracker.record_usage(
-                        user_id=interaction.user.id,
-                        username=interaction.user.display_name or interaction.user.name,
-                        prompt_tokens=prompt_tokens,
-                        output_tokens=output_tokens,
-                        total_tokens=total_tokens,
-                        images_generated=images_generated
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not track usage: {e}")
-            
-            # Prepare response
-            response_content = "🗞️ **Today's News Visualization**\n\n"
-            
-            # Add brief summary of the news stories used
-            if news_items:
-                response_content += "**Based on today's top stories:**\n"
-                for i, news in enumerate(news_items[:3], 1):
-                    title = news.get('title', '')[:80]  # Truncate long titles
-                    if title:
-                        response_content += f"{i}. {title}...\n"
-                response_content += "\n"
-            
-            # Add AI response text if available
-            if genai_text_response and genai_text_response.strip():
-                response_content += f"**AI Description:**\n{genai_text_response}\n\n"
-            
-            # Prepare image if available
-            files = []
-            if generated_image:
-                # Save and send the image
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"today_news_{timestamp}.png"
-                
-                # Save to disk
-                filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-                generated_image.save(filepath)
-                
-                # Save to buffer for Discord
-                img_buffer = io.BytesIO()
-                generated_image.save(img_buffer, format='PNG')
-                img_buffer.seek(0)
-                files.append(discord.File(img_buffer, filename=filename))
-                
-                response_content += "🎨 *Generated image depicts the essence of today's major news stories*"
-            else:
-                response_content += "❌ Unable to generate image. Please try again later."
-            
-            # Send the final response
-            await interaction.edit_original_response(content=response_content, attachments=files)
-            
-        except ValueError as e:
-            # Handle configuration errors
-            if "GOOGLE_SEARCH" in str(e):
-                await interaction.edit_original_response(
-                    content="❌ Google Search is not properly configured. Please contact the bot administrator to set up the search functionality."
-                )
-            else:
-                raise e
-                
-    except Exception as e:
-        logger.error(f"Error in today command: {e}")
-        try:
-            await interaction.edit_original_response(content="❌ An error occurred while processing today's news. Please try again later.")
-        except:
-            # If editing fails, try to send a new message
-            await interaction.followup.send("❌ An error occurred while processing today's news. Please try again later.")
 
 
 
