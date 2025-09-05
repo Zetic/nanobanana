@@ -70,6 +70,9 @@ async def extract_text_from_message(message):
 async def handle_generation_request(message):
     """Handle image generation request when bot is mentioned."""
     try:
+        # Send immediate response
+        response_message = await message.reply("🔄 Generating response...")
+        
         # Extract text content and download images
         text_content = await extract_text_from_message(message)
         images = []
@@ -78,7 +81,7 @@ async def handle_generation_request(message):
         for attachment in message.attachments:
             if attachment.content_type and attachment.content_type.startswith('image/'):
                 if attachment.size > config.MAX_IMAGE_SIZE:
-                    await message.reply(f"Image {attachment.filename} is too large. Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB.")
+                    await response_message.edit(content=f"❌ Image {attachment.filename} is too large. Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB.")
                     return
                 
                 image = await download_image(attachment.url)
@@ -87,17 +90,21 @@ async def handle_generation_request(message):
                     logger.info(f"Downloaded image: {attachment.filename}")
         
         # Process based on inputs
-        await process_generation_request(message, text_content, images)
+        await process_generation_request(response_message, text_content, images)
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
         try:
-            await message.reply("An error occurred while processing your request. Please try again.")
+            # Try to edit the response message if it exists, otherwise reply to original
+            if 'response_message' in locals():
+                await response_message.edit(content="❌ An error occurred while processing your request. Please try again.")
+            else:
+                await message.reply("❌ An error occurred while processing your request. Please try again.")
         except:
             pass
 
-async def process_generation_request(message, text_content: str, images: List):
-    """Process the generation request and return natural API response."""
+async def process_generation_request(response_message, text_content: str, images: List):
+    """Process the generation request and edit the response message with the result."""
     try:
         # Generate based on available inputs
         generated_image = None
@@ -124,7 +131,7 @@ async def process_generation_request(message, text_content: str, images: List):
             generated_image, genai_text_response = await get_image_generator().generate_image_from_text(text_content)
         else:
             # No content provided
-            await message.reply("Please provide some text or attach an image for me to work with!")
+            await response_message.edit(content="❌ Please provide some text or attach an image for me to work with!")
             return
         
         # Send natural response based on what the API returned
@@ -151,19 +158,19 @@ async def process_generation_request(message, text_content: str, images: List):
             img_buffer.seek(0)
             files.append(discord.File(img_buffer, filename=filename))
         
-        # Send response
+        # Edit response message with the final result
         if responses or files:
             content = "\n".join(responses) if responses else None
-            await message.reply(content=content, files=files)
-            await message.add_reaction('✅')
+            await response_message.edit(content=content, attachments=files)
+            await response_message.add_reaction('✅')
         else:
-            await message.reply("I wasn't able to generate anything from your request. Please try again with different input.")
-            await message.add_reaction('❌')
+            await response_message.edit(content="❌ I wasn't able to generate anything from your request. Please try again with different input.")
+            await response_message.add_reaction('❌')
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
-        await message.reply("An error occurred while generating. Please try again.")
-        await message.add_reaction('❌')
+        await response_message.edit(content="❌ An error occurred while generating. Please try again.")
+        await response_message.add_reaction('❌')
 
 @bot.command(name='info')
 async def info_command(ctx):
