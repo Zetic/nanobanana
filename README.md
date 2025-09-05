@@ -87,8 +87,15 @@ When you mention the bot in a reply to another message, it will automatically in
 
 ### Available Commands
 
-- `!info` - Show help information
+**Text Commands (use with `!` prefix):**
+- `!help` - Show help information
+- `!info` - Show detailed help information  
 - `!status` - Display bot status
+
+**Slash Commands (use with `/` prefix):**
+- `/help` - Show help information
+- `/info` - Show detailed help information
+- `/status` - Display bot status
 
 ## 🛠️ Configuration
 
