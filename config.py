@@ -16,5 +16,8 @@ MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8MB max per image
 MAX_IMAGES = 10  # Maximum number of images to process
 GENERATED_IMAGES_DIR = 'generated_images'
 
+# Rate limiting configuration
+DAILY_IMAGE_LIMIT = 5  # Maximum images per user per day
+
 # Ensure directories exist
 os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)

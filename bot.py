@@ -149,6 +149,15 @@ async def handle_generation_request(message):
 async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
     try:
+        # Check rate limit before generating images
+        if not usage_tracker.can_generate_image(user.id):
+            daily_count = usage_tracker.get_daily_image_count(user.id)
+            await response_message.edit(
+                content=f"🚫 **Daily limit reached!** You've already generated {daily_count} images today. "
+                f"You can generate {config.DAILY_IMAGE_LIMIT} images per day. Try again tomorrow!"
+            )
+            return
+        
         # Generate based on available inputs
         generated_image = None
         genai_text_response = None
