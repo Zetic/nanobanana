@@ -77,7 +77,7 @@ async def handle_generation_request(message):
         text_content = await extract_text_from_message(message)
         images = []
         
-        # Download attached images
+        # Download attached images from the mentioning message
         for attachment in message.attachments:
             if attachment.content_type and attachment.content_type.startswith('image/'):
                 if attachment.size > config.MAX_IMAGE_SIZE:
@@ -88,6 +88,28 @@ async def handle_generation_request(message):
                 if image:
                     images.append(image)
                     logger.info(f"Downloaded image: {attachment.filename}")
+        
+        # If this is a reply message, also download images from the original message
+        if message.reference and message.reference.message_id:
+            try:
+                # Fetch the original message being replied to
+                original_message = await message.channel.fetch_message(message.reference.message_id)
+                
+                # Download images from the original message
+                for attachment in original_message.attachments:
+                    if attachment.content_type and attachment.content_type.startswith('image/'):
+                        if attachment.size > config.MAX_IMAGE_SIZE:
+                            logger.warning(f"Skipping large image from original message: {attachment.filename}")
+                            continue
+                        
+                        image = await download_image(attachment.url)
+                        if image:
+                            images.append(image)
+                            logger.info(f"Downloaded image from original message: {attachment.filename}")
+                            
+            except Exception as e:
+                logger.error(f"Error fetching original message: {e}")
+                # Continue processing even if we can't fetch the original message
         
         # Process based on inputs
         await process_generation_request(response_message, text_content, images)
@@ -186,11 +208,13 @@ Just mention me ({bot.user.mention}) in a message with your prompt and optionall
 • `{bot.user.mention} Create a nano banana in space`
 • `{bot.user.mention} Make this cat magical` (with image attached)
 • `{bot.user.mention} Transform this into cyberpunk style` (with multiple images)
+• Reply to a message with images: `{bot.user.mention} make this change` (uses images from original message)
 
 **📝 Features:**
 • Text-to-image generation
 • Image-to-image transformation  
 • Multiple image processing
+• Reply message support (uses images from original message)
 • Natural text responses
 • Powered by Google Gemini AI"""
     
