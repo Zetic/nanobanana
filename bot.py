@@ -221,41 +221,7 @@ async def process_generation_request(response_message, text_content: str, images
         logger.error(f"Error processing generation request: {e}")
         await response_message.edit(content="An error occurred while generating. Please try again.")
 
-@bot.command(name='info')
-async def info_command(ctx):
-    """Show help information."""
-    # Use ctx.bot.user for safety and provide fallbacks
-    bot_user = ctx.bot.user
-    bot_name = bot_user.display_name if bot_user else "Nano Banana"
-    bot_mention = bot_user.mention if bot_user else "@Nano Banana"
-    
-    help_text = f"""**{bot_name} - Help**
 
-I'm a bot that generates images and text using Google's AI!
-
-**How to use:**
-Just mention me ({bot_mention}) in a message with your prompt and optionally attach images!
-
-**Examples:**
-• `{bot_mention} Create a nano banana in space`
-• `{bot_mention} Make this cat magical` (with image attached)
-• `{bot_mention} Transform this into cyberpunk style` (with multiple images)
-• Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
-
-**Features:**
-• Text-to-image generation
-• Image-to-image transformation  
-• Multiple image processing
-• Reply message support (uses images and text from original message)
-• Natural text responses
-• Powered by Google Gemini AI"""
-    
-    await ctx.send(help_text)
-
-@bot.command(name='help')
-async def help_command(ctx):
-    """Show help information."""
-    await info_command(ctx)
 
 # Slash command versions
 @bot.tree.command(name='help', description='Show help information')
@@ -335,20 +301,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
     
     await interaction.response.send_message(help_text)
 
-@bot.command(name='status')
-async def status_command(ctx):
-    """Show bot status."""
-    # Get latency safely
-    latency = ctx.bot.latency
-    latency_ms = round(latency * 1000) if latency and not (latency != latency) else 0  # Check for NaN
-    
-    status_text = f"""**Bot Status**
 
-**Status:** Online
-**Guilds:** {len(ctx.bot.guilds)}
-**Latency:** {latency_ms}ms"""
-    
-    await ctx.send(status_text)
 
 def main():
     """Main function to run the bot."""
