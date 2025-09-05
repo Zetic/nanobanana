@@ -8,6 +8,89 @@ import config
 
 logger = logging.getLogger(__name__)
 
+class TextGenerator:
+    """Handles Google GenAI text generation with search grounding."""
+    
+    def __init__(self):
+        if not config.GOOGLE_API_KEY:
+            raise ValueError("GOOGLE_API_KEY not found in environment variables")
+        
+        self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
+        self.model = "gemini-2.0-flash-exp"  # Use a text model for search
+    
+    async def search_today_news(self) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Search for today's biggest news using Google Search grounding. Returns (news_summary, usage_metadata)."""
+        try:
+            # Create Google Search retrieval tool
+            google_search_tool = types.Tool(
+                google_search_retrieval=types.GoogleSearchRetrieval()
+            )
+            
+            prompt = """What is the biggest, most important news story happening today? 
+            Please provide a concise summary focusing on the most significant global or national news event of the day. 
+            Include key details like what happened, who is involved, and why it's significant.
+            Keep the response factual and informative in 2-3 sentences."""
+            
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    tools=[google_search_tool]
+                )
+            )
+            
+            text = self._extract_text_from_response(response)
+            usage = self._extract_usage_from_response(response)
+            
+            return text, usage
+            
+        except Exception as e:
+            logger.error(f"Error searching for today's news: {e}")
+            return None, None
+    
+    def _extract_text_from_response(self, response) -> Optional[str]:
+        """Extract text from GenAI response."""
+        try:
+            for part in response.candidates[0].content.parts:
+                if part.text is not None:
+                    return part.text.strip()
+            
+            logger.warning("No text found in GenAI response")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting text from response: {e}")
+            return None
+    
+    def _extract_usage_from_response(self, response) -> Optional[Dict[str, Any]]:
+        """Extract usage metadata from GenAI response."""
+        try:
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_metadata = response.usage_metadata
+                return {
+                    "prompt_token_count": getattr(usage_metadata, 'prompt_token_count', 0) or 0,
+                    "candidates_token_count": getattr(usage_metadata, 'candidates_token_count', 0) or 0,
+                    "total_token_count": getattr(usage_metadata, 'total_token_count', 0) or 0,
+                    "cached_content_token_count": getattr(usage_metadata, 'cached_content_token_count', 0) or 0,
+                }
+            else:
+                logger.warning("No usage metadata found in GenAI response")
+                return {
+                    "prompt_token_count": 0,
+                    "candidates_token_count": 0,
+                    "total_token_count": 0,
+                    "cached_content_token_count": 0,
+                }
+            
+        except Exception as e:
+            logger.error(f"Error extracting usage metadata from response: {e}")
+            return {
+                "prompt_token_count": 0,
+                "candidates_token_count": 0,
+                "total_token_count": 0,
+                "cached_content_token_count": 0,
+            }
+
 class ImageGenerator:
     """Handles Google GenAI image generation."""
     
