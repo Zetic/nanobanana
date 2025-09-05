@@ -11,6 +11,7 @@ A Discord bot that generates images and text using Google's Gemini AI. The bot r
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
+- **Usage Tracking**: Track token usage per user with detailed statistics
 
 ## 🚀 Quick Start
 
@@ -89,13 +90,21 @@ When you mention the bot in a reply to another message, it will automatically in
 
 **Text Commands (use with `!` prefix):**
 - `!help` - Show help information
-- `!info` - Show detailed help information  
-- `!status` - Display bot status
 
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
-- `/info` - Show detailed help information
-- `/status` - Display bot status
+- `/usage` - Show token usage statistics
+
+### Usage Tracking
+
+The bot automatically tracks token usage for each Discord user:
+- **Input tokens**: Tokens used for prompts and image inputs
+- **Output tokens**: Tokens used for generated responses  
+- **Total tokens**: Combined input and output tokens
+- **Images generated**: Number of images created
+- **Request count**: Total number of requests made
+
+Use `/usage` to view statistics sorted by output token usage. Data is stored locally in JSON format with thread-safe operations for concurrent access.
 
 ## 🛠️ Configuration
 

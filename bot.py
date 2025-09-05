@@ -11,6 +11,7 @@ from typing import List, Dict, Any
 import config
 from image_utils import download_image
 from genai_client import ImageGenerator
+from usage_tracker import usage_tracker
 
 # Set up logging
 logging.basicConfig(
@@ -142,7 +143,7 @@ async def handle_generation_request(message):
                 # Continue processing even if we can't fetch the original message
         
         # Process based on inputs
-        await process_generation_request(response_message, text_content, images)
+        await process_generation_request(response_message, text_content, images, message.author)
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
@@ -155,36 +156,56 @@ async def handle_generation_request(message):
         except:
             pass
 
-async def process_generation_request(response_message, text_content: str, images: List):
+async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
     try:
         # Generate based on available inputs
         generated_image = None
         genai_text_response = None
+        usage_metadata = None
         
         if images and text_content.strip():
             # Text + Image(s) case
             if len(images) == 1:
-                generated_image, genai_text_response = await get_image_generator().generate_image_from_text_and_image(
+                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
                     text_content, images[0]
                 )
             else:
-                generated_image, genai_text_response = await get_image_generator().generate_image_from_text_and_images(
+                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
                     text_content, images
                 )
         elif images:
             # Image(s) only case - no text provided
             if len(images) == 1:
-                generated_image, genai_text_response = await get_image_generator().generate_image_from_image_only(images[0])
+                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
             else:
-                generated_image, genai_text_response = await get_image_generator().generate_image_from_images_only(images)
+                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
         elif text_content.strip():
             # Text only case
-            generated_image, genai_text_response = await get_image_generator().generate_image_from_text(text_content)
+            generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
         else:
             # No content provided
             await response_message.edit(content="Please provide some text or attach an image for me to work with!")
             return
+        
+        # Track usage if we have metadata and a user
+        if usage_metadata and user and not user.bot:  # Don't track bot usage
+            try:
+                prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+                output_tokens = usage_metadata.get("candidates_token_count", 0)
+                total_tokens = usage_metadata.get("total_token_count", 0)
+                images_generated = 1 if generated_image else 0
+                
+                usage_tracker.record_usage(
+                    user_id=user.id,
+                    username=user.display_name or user.name,
+                    prompt_tokens=prompt_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    images_generated=images_generated
+                )
+            except Exception as e:
+                logger.warning(f"Could not track usage: {e}")
         
         # Send natural response based on what the API returned
         responses = []
@@ -255,51 +276,61 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
     
     await interaction.response.send_message(help_text)
 
-@bot.tree.command(name='status', description='Show bot status')
-async def status_slash(interaction: discord.Interaction):
-    """Show bot status (slash command)."""
-    # Get latency safely
-    latency = interaction.client.latency
-    latency_ms = round(latency * 1000) if latency and not (latency != latency) else 0  # Check for NaN
-    
-    status_text = f"""**Bot Status**
-
-**Status:** Online
-**Guilds:** {len(interaction.client.guilds)}
-**Latency:** {latency_ms}ms"""
-    
-    await interaction.response.send_message(status_text)
-
-@bot.tree.command(name='info', description='Show detailed help information')
-async def info_slash(interaction: discord.Interaction):
-    """Show detailed help information (slash command)."""
-    # Use interaction.client.user for safety and provide fallbacks
-    bot_user = interaction.client.user
-    bot_name = bot_user.display_name if bot_user else "Nano Banana"
-    bot_mention = bot_user.mention if bot_user else "@Nano Banana"
-    
-    help_text = f"""**{bot_name} - Help**
-
-I'm a bot that generates images and text using Google's AI!
-
-**How to use:**
-Just mention me ({bot_mention}) in a message with your prompt and optionally attach images!
-
-**Examples:**
-• `{bot_mention} Create a nano banana in space`
-• `{bot_mention} Make this cat magical` (with image attached)
-• `{bot_mention} Transform this into cyberpunk style` (with multiple images)
-• Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
-
-**Features:**
-• Text-to-image generation
-• Image-to-image transformation  
-• Multiple image processing
-• Reply message support (uses images and text from original message)
-• Natural text responses
-• Powered by Google Gemini AI"""
-    
-    await interaction.response.send_message(help_text)
+@bot.tree.command(name='usage', description='Show token usage statistics')
+async def usage_slash(interaction: discord.Interaction):
+    """Show token usage statistics (slash command)."""
+    try:
+        # Get usage statistics
+        users_list = usage_tracker.get_usage_stats()
+        total_stats = usage_tracker.get_total_stats()
+        
+        if not users_list:
+            await interaction.response.send_message("No usage data available yet. Start using the bot to generate some statistics!")
+            return
+        
+        # Build the response message
+        usage_text = "**🍌 Token Usage Statistics**\n\n"
+        
+        # Add overall stats
+        usage_text += f"**📊 Overall Statistics:**\n"
+        usage_text += f"• Total Users: {total_stats['total_users']}\n"
+        usage_text += f"• Total Requests: {total_stats['total_requests']}\n"
+        usage_text += f"• Total Input Tokens: {total_stats['total_prompt_tokens']:,}\n"
+        usage_text += f"• Total Output Tokens: {total_stats['total_output_tokens']:,}\n"
+        usage_text += f"• Total Tokens: {total_stats['total_tokens']:,}\n"
+        usage_text += f"• Images Generated: {total_stats['total_images_generated']}\n\n"
+        
+        # Add top users (limit to top 10 to avoid message length issues)
+        usage_text += "**👑 Top Users by Output Tokens:**\n"
+        
+        top_users = users_list[:10]  # Limit to top 10
+        for i, (user_id, user_data) in enumerate(top_users, 1):
+            username = user_data.get('username', 'Unknown User')
+            output_tokens = user_data.get('total_output_tokens', 0)
+            input_tokens = user_data.get('total_prompt_tokens', 0)
+            total_tokens = user_data.get('total_tokens', 0)
+            images = user_data.get('images_generated', 0)
+            requests = user_data.get('requests_count', 0)
+            
+            usage_text += f"{i}. **{username}**\n"
+            usage_text += f"   • Output Tokens: {output_tokens:,}\n"
+            usage_text += f"   • Input Tokens: {input_tokens:,}\n"
+            usage_text += f"   • Total Tokens: {total_tokens:,}\n"
+            usage_text += f"   • Images: {images} | Requests: {requests}\n\n"
+        
+        if len(users_list) > 10:
+            usage_text += f"... and {len(users_list) - 10} more users.\n"
+        
+        # Check if message is too long for Discord (2000 char limit)
+        if len(usage_text) > 1950:
+            # Truncate and add note
+            usage_text = usage_text[:1900] + "\n\n*Message truncated due to length limit.*"
+        
+        await interaction.response.send_message(usage_text)
+        
+    except Exception as e:
+        logger.error(f"Error getting usage statistics: {e}")
+        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
 
 
 
