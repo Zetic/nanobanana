@@ -110,23 +110,13 @@ async def handle_generation_request(message):
                     images.append(image)
                     logger.info(f"Downloaded image: {attachment.filename}")
         
-        # If this is a reply message, also download images and extract text from the original message
+        # If this is a reply message, download images from the original message (ignore text)
         if message.reference and message.reference.message_id:
             try:
                 # Fetch the original message being replied to
                 original_message = await message.channel.fetch_message(message.reference.message_id)
                 
-                # Extract text content from the original message
-                original_text_content = await extract_text_from_message(original_message)
-                if original_text_content.strip():
-                    # Combine original message text with reply text
-                    if text_content.strip():
-                        text_content = f"{text_content} {original_text_content}"
-                    else:
-                        text_content = original_text_content
-                    logger.info(f"Combined text from original message: {original_text_content}")
-                
-                # Download images from the original message
+                # Download images from the original message (text is ignored as per issue requirements)
                 for attachment in original_message.attachments:
                     if attachment.content_type and attachment.content_type.startswith('image/'):
                         if attachment.size > config.MAX_IMAGE_SIZE:
@@ -270,7 +260,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • Text-to-image generation
 • Image-to-image transformation  
 • Multiple image processing
-• Reply message support (uses images and text from original message)
+• Reply message support (uses images from original message, ignores text)
 • Natural text responses
 • Powered by Google Gemini AI"""
     
