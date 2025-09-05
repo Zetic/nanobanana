@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import logging
 import asyncio
 import io
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents)
+bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
 
 # Initialize image generator (will be created when first used)
 image_generator = None
@@ -40,6 +41,13 @@ async def on_ready():
     """Called when the bot is ready."""
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
+    
+    # Sync slash commands
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f'Synced {len(synced)} slash commands')
+    except Exception as e:
+        logger.error(f'Failed to sync slash commands: {e}')
 
 @bot.event
 async def on_message(message):
@@ -213,21 +221,29 @@ async def process_generation_request(response_message, text_content: str, images
         logger.error(f"Error processing generation request: {e}")
         await response_message.edit(content="An error occurred while generating. Please try again.")
 
-@bot.command(name='info')
-async def info_command(ctx):
-    """Show help information."""
-    help_text = f"""**{bot.user.display_name} - Help**
+
+
+# Slash command versions
+@bot.tree.command(name='help', description='Show help information')
+async def help_slash(interaction: discord.Interaction):
+    """Show help information (slash command)."""
+    # Use interaction.client.user for safety and provide fallbacks
+    bot_user = interaction.client.user
+    bot_name = bot_user.display_name if bot_user else "Nano Banana"
+    bot_mention = bot_user.mention if bot_user else "@Nano Banana"
+    
+    help_text = f"""**{bot_name} - Help**
 
 I'm a bot that generates images and text using Google's AI!
 
 **How to use:**
-Just mention me ({bot.user.mention}) in a message with your prompt and optionally attach images!
+Just mention me ({bot_mention}) in a message with your prompt and optionally attach images!
 
 **Examples:**
-• `{bot.user.mention} Create a nano banana in space`
-• `{bot.user.mention} Make this cat magical` (with image attached)
-• `{bot.user.mention} Transform this into cyberpunk style` (with multiple images)
-• Reply to a message with images: `{bot.user.mention} make this change` (uses images and text from original message)
+• `{bot_mention} Create a nano banana in space`
+• `{bot_mention} Make this cat magical` (with image attached)
+• `{bot_mention} Transform this into cyberpunk style` (with multiple images)
+• Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
 
 **Features:**
 • Text-to-image generation
@@ -237,18 +253,55 @@ Just mention me ({bot.user.mention}) in a message with your prompt and optionall
 • Natural text responses
 • Powered by Google Gemini AI"""
     
-    await ctx.send(help_text)
+    await interaction.response.send_message(help_text)
 
-@bot.command(name='status')
-async def status_command(ctx):
-    """Show bot status."""
+@bot.tree.command(name='status', description='Show bot status')
+async def status_slash(interaction: discord.Interaction):
+    """Show bot status (slash command)."""
+    # Get latency safely
+    latency = interaction.client.latency
+    latency_ms = round(latency * 1000) if latency and not (latency != latency) else 0  # Check for NaN
+    
     status_text = f"""**Bot Status**
 
 **Status:** Online
-**Guilds:** {len(bot.guilds)}
-**Latency:** {round(bot.latency * 1000)}ms"""
+**Guilds:** {len(interaction.client.guilds)}
+**Latency:** {latency_ms}ms"""
     
-    await ctx.send(status_text)
+    await interaction.response.send_message(status_text)
+
+@bot.tree.command(name='info', description='Show detailed help information')
+async def info_slash(interaction: discord.Interaction):
+    """Show detailed help information (slash command)."""
+    # Use interaction.client.user for safety and provide fallbacks
+    bot_user = interaction.client.user
+    bot_name = bot_user.display_name if bot_user else "Nano Banana"
+    bot_mention = bot_user.mention if bot_user else "@Nano Banana"
+    
+    help_text = f"""**{bot_name} - Help**
+
+I'm a bot that generates images and text using Google's AI!
+
+**How to use:**
+Just mention me ({bot_mention}) in a message with your prompt and optionally attach images!
+
+**Examples:**
+• `{bot_mention} Create a nano banana in space`
+• `{bot_mention} Make this cat magical` (with image attached)
+• `{bot_mention} Transform this into cyberpunk style` (with multiple images)
+• Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
+
+**Features:**
+• Text-to-image generation
+• Image-to-image transformation  
+• Multiple image processing
+• Reply message support (uses images and text from original message)
+• Natural text responses
+• Powered by Google Gemini AI"""
+    
+    await interaction.response.send_message(help_text)
+
+
 
 def main():
     """Main function to run the bot."""
