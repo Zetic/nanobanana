@@ -94,6 +94,7 @@ When you mention the bot in a reply to another message, it will automatically in
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
 - `/usage` - Show token usage statistics
+- `/today` - Generate an image depicting today's biggest news
 
 ### Usage Tracking
 
@@ -114,6 +115,8 @@ Use `/usage` to view statistics sorted by output token usage. Data is stored loc
 |----------|-------------|----------|
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
+| `GOOGLE_SEARCH_ENGINE_ID` | Your Google Custom Search Engine ID | Yes (for /today command) |
+| `GOOGLE_SEARCH_API_KEY` | Your Google Search API key | No (defaults to GOOGLE_API_KEY) |
 
 ### Bot Configuration
 
@@ -164,6 +167,12 @@ The bot uses Google's Gemini 2.5 Flash Image Preview model for generation:
 @Nano Banana Combine these characters in an epic battle scene
 ```
 *(with multiple images attached)*
+
+### Daily News Visualization
+```
+/today
+```
+*Searches for today's biggest news stories and creates an artistic image depicting them*
 
 ## 🤝 Contributing
 
