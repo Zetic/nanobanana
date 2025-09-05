@@ -3,7 +3,7 @@ import logging
 from PIL import Image
 from google import genai
 from google.genai import types
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 import config
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,8 @@ class ImageGenerator:
         self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
         self.model = "gemini-2.5-flash-image-preview"
     
-    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str]]:
-        """Generate an image from text prompt only. Returns (image, text_response)."""
+    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate an image from text prompt only. Returns (image, text_response, usage_metadata)."""
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -28,15 +28,16 @@ class ImageGenerator:
             
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
+            usage = self._extract_usage_from_response(response)
             
-            return image, text
+            return image, text, usage
             
         except Exception as e:
             logger.error(f"Error generating image from text: {e}")
-            return None, None
+            return None, None, None
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str]]:
-        """Generate an image from both text prompt and input image. Returns (image, text_response)."""
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -45,14 +46,15 @@ class ImageGenerator:
             
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
-            return image, text
+            usage = self._extract_usage_from_response(response)
+            return image, text, usage
             
         except Exception as e:
             logger.error(f"Error generating image from text and image: {e}")
-            return None, None
+            return None, None, None
     
-    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str]]:
-        """Generate an image from input image only with generic transformation prompt. Returns (image, text_response)."""
+    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
         try:
             # Use a generic prompt that lets the AI decide how to transform the image
             generic_prompt = "Transform and enhance this image creatively while maintaining its core subject and essence."
@@ -64,14 +66,15 @@ class ImageGenerator:
             
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
-            return image, text
+            usage = self._extract_usage_from_response(response)
+            return image, text, usage
             
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
-            return None, None
+            return None, None, None
     
-    async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str]]:
-        """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response)."""
+    async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
         try:
             # Use a generic prompt for multiple images
             generic_prompt = "Creatively combine and transform these images while maintaining their core subjects and essence."
@@ -100,14 +103,15 @@ class ImageGenerator:
             
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
-            return image, text
+            usage = self._extract_usage_from_response(response)
+            return image, text, usage
             
         except Exception as e:
             logger.error(f"Error generating image from images only: {e}")
-            return None, None
+            return None, None, None
 
-    async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str]]:
-        """Generate an image from text prompt and multiple input images. Returns (image, text_response)."""
+    async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata)."""
         try:
             # Create contents list starting with the prompt
             contents = [prompt]
@@ -133,11 +137,12 @@ class ImageGenerator:
             
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
-            return image, text
+            usage = self._extract_usage_from_response(response)
+            return image, text, usage
             
         except Exception as e:
             logger.error(f"Error generating image from text and multiple images: {e}")
-            return None, None
+            return None, None, None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
         """Extract image from GenAI response."""
@@ -169,3 +174,32 @@ class ImageGenerator:
         except Exception as e:
             logger.error(f"Error extracting text from response: {e}")
             return None
+
+    def _extract_usage_from_response(self, response) -> Optional[Dict[str, Any]]:
+        """Extract usage metadata from GenAI response."""
+        try:
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_metadata = response.usage_metadata
+                return {
+                    "prompt_token_count": getattr(usage_metadata, 'prompt_token_count', 0) or 0,
+                    "candidates_token_count": getattr(usage_metadata, 'candidates_token_count', 0) or 0,
+                    "total_token_count": getattr(usage_metadata, 'total_token_count', 0) or 0,
+                    "cached_content_token_count": getattr(usage_metadata, 'cached_content_token_count', 0) or 0,
+                }
+            else:
+                logger.warning("No usage metadata found in GenAI response")
+                return {
+                    "prompt_token_count": 0,
+                    "candidates_token_count": 0,
+                    "total_token_count": 0,
+                    "cached_content_token_count": 0,
+                }
+            
+        except Exception as e:
+            logger.error(f"Error extracting usage metadata from response: {e}")
+            return {
+                "prompt_token_count": 0,
+                "candidates_token_count": 0,
+                "total_token_count": 0,
+                "cached_content_token_count": 0,
+            }
