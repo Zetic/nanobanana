@@ -17,6 +17,7 @@ class ImageGenerator:
         
         self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
         self.model = "gemini-2.5-flash-image-preview"
+        self.text_only_model = "gemini-2.5-flash"
     
     async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only. Returns (image, text_response, usage_metadata)."""
@@ -142,6 +143,31 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and multiple images: {e}")
+            return None, None, None
+
+    async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
+        """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata)."""
+        try:
+            # Create appropriate prompt based on input
+            if input_images:
+                # If images are provided, describe them in the prompt since text-only model can't see them
+                full_prompt = f"{prompt}\n\n[Note: Image(s) were provided but cannot be processed due to daily image generation limit. Responding with text only.]"
+            else:
+                full_prompt = prompt
+            
+            response = self.client.models.generate_content(
+                model=self.text_only_model,
+                contents=[full_prompt],
+            )
+            
+            text = self._extract_text_from_response(response)
+            usage = self._extract_usage_from_response(response)
+            
+            # Always return None for image since this is text-only
+            return None, text, usage
+            
+        except Exception as e:
+            logger.error(f"Error generating text-only response: {e}")
             return None, None, None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:

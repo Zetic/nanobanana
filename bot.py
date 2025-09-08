@@ -149,43 +149,59 @@ async def handle_generation_request(message):
 async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
     try:
-        # Check rate limit before generating images
-        if not usage_tracker.can_generate_image(user.id):
-            daily_count = usage_tracker.get_daily_image_count(user.id)
-            await response_message.edit(
-                content=f"🚫 **Daily limit reached!** You've already generated {daily_count} images today. "
-                f"You can generate {config.DAILY_IMAGE_LIMIT} images per day. Try again tomorrow!"
-            )
-            return
+        # Check if user can generate images
+        can_generate_images = usage_tracker.can_generate_image(user.id)
         
-        # Generate based on available inputs
+        # Generate based on available inputs and rate limit status
         generated_image = None
         genai_text_response = None
         usage_metadata = None
         
-        if images and text_content.strip():
-            # Text + Image(s) case
-            if len(images) == 1:
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
-                    text_content, images[0]
-                )
+        if not can_generate_images:
+            # User is rate limited for images - use text-only fallback
+            daily_count = usage_tracker.get_daily_image_count(user.id)
+            logger.info(f"User {user.id} is rate limited for images ({daily_count}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
+            
+            # Generate text-only response regardless of input type
+            if text_content.strip() or images:
+                # Use text content if available, otherwise provide generic prompt for image analysis
+                prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
+                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
+                
+                # Add rate limit notice to the response
+                if genai_text_response:
+                    genai_text_response = f"⚠️ *Image generation limit reached ({daily_count}/{config.DAILY_IMAGE_LIMIT} today). Providing text-only response.*\n\n{genai_text_response}"
+                else:
+                    genai_text_response = f"⚠️ **Daily image limit reached!** You've generated {daily_count}/{config.DAILY_IMAGE_LIMIT} images today. Here's a text-only response instead:"
             else:
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
-                    text_content, images
-                )
-        elif images:
-            # Image(s) only case - no text provided
-            if len(images) == 1:
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
-            else:
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
-        elif text_content.strip():
-            # Text only case
-            generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+                # No content provided
+                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                return
         else:
-            # No content provided
-            await response_message.edit(content="Please provide some text or attach an image for me to work with!")
-            return
+            # User can generate images - use normal flow
+            if images and text_content.strip():
+                # Text + Image(s) case
+                if len(images) == 1:
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
+                        text_content, images[0]
+                    )
+                else:
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
+                        text_content, images
+                    )
+            elif images:
+                # Image(s) only case - no text provided
+                if len(images) == 1:
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
+                else:
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
+            elif text_content.strip():
+                # Text only case
+                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+            else:
+                # No content provided
+                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                return
         
         # Track usage if we have metadata and a user
         if usage_metadata and user and not user.bot:  # Don't track bot usage
