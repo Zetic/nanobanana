@@ -20,7 +20,7 @@ class OpenAIImageGenerator:
         """Generate a meme using the hardcoded prompt."""
         try:
             # Fixed prompt as specified in the issue
-            prompt = "generate a single image meme that makes no sense. it can be borderline offensive"
+            prompt = "generate a single image meme that makes no sense. it can be borderline offsve"
             
             response = self.client.images.generate(
                 model="dall-e-3",  # Note: Issue mentions "gpt-image-1" but using DALL-E 3 as the available OpenAI image model
