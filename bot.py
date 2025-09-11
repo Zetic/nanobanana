@@ -11,6 +11,7 @@ from typing import List, Dict, Any
 import config
 from image_utils import download_image
 from genai_client import ImageGenerator
+from openai_client import OpenAIImageGenerator
 from usage_tracker import usage_tracker
 
 # Set up logging
@@ -29,6 +30,7 @@ bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_c
 
 # Initialize image generator (will be created when first used)
 image_generator = None
+openai_image_generator = None
 
 def get_image_generator():
     """Get or create the image generator instance."""
@@ -36,6 +38,13 @@ def get_image_generator():
     if image_generator is None:
         image_generator = ImageGenerator()
     return image_generator
+
+def get_openai_image_generator():
+    """Get or create the OpenAI image generator instance."""
+    global openai_image_generator
+    if openai_image_generator is None:
+        openai_image_generator = OpenAIImageGenerator()
+    return openai_image_generator
 
 @bot.event
 async def on_ready():
@@ -287,7 +296,12 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • Multiple image processing
 • Reply message support (uses images from original message, ignores text)
 • Natural text responses
-• Powered by Google Gemini AI"""
+• Powered by Google Gemini AI
+
+**Slash Commands:**
+• `/help` - Show this help message
+• `/usage` - Show token usage statistics  
+• `/meme` - Generate a nonsensical meme using OpenAI"""
     
     await interaction.response.send_message(help_text)
 
@@ -346,6 +360,73 @@ async def usage_slash(interaction: discord.Interaction):
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
         await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+
+@bot.tree.command(name='meme', description='Generate a nonsensical meme using OpenAI')
+async def meme_slash(interaction: discord.Interaction):
+    """Generate a meme using OpenAI (slash command)."""
+    try:
+        # Check if user can generate images (rate limiting)
+        can_generate_images = usage_tracker.can_generate_image(interaction.user.id)
+        
+        if not can_generate_images:
+            daily_count = usage_tracker.get_daily_image_count(interaction.user.id)
+            await interaction.response.send_message(
+                f"You've reached your daily image generation limit ({daily_count}/{config.DAILY_IMAGE_LIMIT}). "
+                "Try again tomorrow!"
+            )
+            return
+        
+        # Send initial response
+        await interaction.response.send_message("🎭 Generating a nonsensical meme... This might take a moment!")
+        
+        # Generate the meme
+        try:
+            generated_image = await get_openai_image_generator().generate_meme()
+            
+            if generated_image:
+                # Save image to send as attachment
+                image_buffer = io.BytesIO()
+                generated_image.save(image_buffer, format='PNG')
+                image_buffer.seek(0)
+                
+                # Create Discord file
+                discord_file = discord.File(image_buffer, filename="meme.png")
+                
+                # Record usage (1 image generated)
+                usage_tracker.record_usage(
+                    user_id=interaction.user.id,
+                    username=interaction.user.display_name or interaction.user.name,
+                    prompt_tokens=0,  # OpenAI doesn't provide detailed token info for DALL-E
+                    output_tokens=0,
+                    total_tokens=0,
+                    images_generated=1
+                )
+                
+                await interaction.edit_original_response(
+                    content="🎭 Here's your nonsensical meme!",
+                    attachments=[discord_file]
+                )
+            else:
+                await interaction.edit_original_response(
+                    content="Sorry, I couldn't generate a meme right now. Please try again later."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error generating meme: {e}")
+            await interaction.edit_original_response(
+                content="An error occurred while generating the meme. Please try again."
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in meme command: {e}")
+        try:
+            await interaction.response.send_message("An error occurred. Please try again.")
+        except:
+            # If we can't send initial response, try to edit it
+            try:
+                await interaction.edit_original_response(content="An error occurred. Please try again.")
+            except:
+                pass
 
 
 
