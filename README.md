@@ -1,12 +1,13 @@
 # 🍌 Nano Banana Discord Bot
 
-A Discord bot that generates images and text using Google's Gemini AI. The bot returns natural responses from the AI - text when the AI responds with text, images when it responds with images, or both when it responds with both.
+A Discord bot that generates images and text using Google's Gemini AI and OpenAI. The bot returns natural responses from the AI - text when the AI responds with text, images when it responds with images, or both when it responds with both.
 
 ## ✨ Features
 
 - **Text-to-Image Generation**: Create images from descriptive text prompts
 - **Image-to-Image Transformation**: Transform uploaded images using AI  
 - **Multi-Image Processing**: Process multiple images simultaneously
+- **Meme Generation**: Generate nonsensical memes using OpenAI
 - **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply (text from original message is ignored)
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
 - **Discord Integration**: Simple mention-based interaction
@@ -94,6 +95,7 @@ When you mention the bot in a reply to another message, it will automatically in
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
 - `/usage` - Show token usage statistics
+- `/meme` - Generate a nonsensical meme using OpenAI
 
 ### Usage Tracking
 
@@ -114,6 +116,7 @@ Use `/usage` to view statistics sorted by output token usage. Data is stored loc
 |----------|-------------|----------|
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
+| `OPENAI_API_KEY` | Your OpenAI API key (for meme generation) | Yes |
 
 ### Bot Configuration
 
@@ -132,6 +135,7 @@ nanobanana/
 ├── bot.py              # Main Discord bot implementation
 ├── config.py           # Configuration management
 ├── genai_client.py     # Google GenAI integration
+├── openai_client.py    # OpenAI integration for memes
 ├── image_utils.py      # Image processing utilities
 ├── main.py             # Entry point
 ├── requirements.txt    # Python dependencies
@@ -141,10 +145,14 @@ nanobanana/
 
 ### API Integration
 
-The bot uses Google's Gemini 2.5 Flash Image Preview model for generation:
+The bot uses multiple AI providers:
 
+**Google Gemini (primary generation):**
 - **Text-to-Image**: Creates images from text descriptions
 - **Image-to-Image**: Transforms existing images based on prompts
+
+**OpenAI (meme generation):**
+- **Meme Creation**: Generates nonsensical memes using DALL-E 3
 
 ## 📝 Examples
 
@@ -164,6 +172,12 @@ The bot uses Google's Gemini 2.5 Flash Image Preview model for generation:
 @Nano Banana Combine these characters in an epic battle scene
 ```
 *(with multiple images attached)*
+
+### Meme Generation
+```
+/meme
+```
+*Generates a nonsensical meme using OpenAI*
 
 ## 🤝 Contributing
 

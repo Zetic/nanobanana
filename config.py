@@ -10,6 +10,9 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 # Google GenAI configuration
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 
+# OpenAI configuration
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
 # Bot configuration
 COMMAND_PREFIX = '!'
 MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8MB max per image
