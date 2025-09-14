@@ -24,11 +24,15 @@ DAILY_IMAGE_LIMIT = 5  # Maximum images per user per day
 
 # Elevated users configuration (Discord IDs)
 # Users in this list are not bound by usage limitations and can use special commands
-ELEVATED_USERS = [
-    # Add Discord user IDs here, e.g.:
-    # 123456789012345678,
-    # 987654321098765432,
-]
+# Read from environment variable as comma-separated list
+_elevated_users_str = os.getenv('ELEVATED_USERS', '')
+ELEVATED_USERS = []
+if _elevated_users_str.strip():
+    try:
+        ELEVATED_USERS = [int(user_id.strip()) for user_id in _elevated_users_str.split(',') if user_id.strip()]
+    except ValueError:
+        print("Warning: Invalid ELEVATED_USERS format in environment variable. Expected comma-separated integers.")
+        ELEVATED_USERS = []
 
 # Ensure directories exist
 os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)
