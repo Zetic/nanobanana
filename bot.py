@@ -5,7 +5,7 @@ import logging
 import asyncio
 import io
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
 import config
@@ -217,6 +217,7 @@ async def process_generation_request(response_message, text_content: str, images
     try:
         # Check if user can generate images
         can_generate_images = usage_tracker.can_generate_image(user.id)
+        daily_count_before = usage_tracker.get_daily_image_count(user.id)
         
         # Generate based on available inputs and rate limit status
         generated_image = None
@@ -225,8 +226,7 @@ async def process_generation_request(response_message, text_content: str, images
         
         if not can_generate_images:
             # User is rate limited for images - use text-only fallback
-            daily_count = usage_tracker.get_daily_image_count(user.id)
-            logger.info(f"User {user.id} is rate limited for images ({daily_count}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
+            logger.info(f"User {user.id} is rate limited for images ({daily_count_before}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
             
             # Generate text-only response regardless of input type
             if text_content.strip() or images:
@@ -234,11 +234,7 @@ async def process_generation_request(response_message, text_content: str, images
                 prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
                 generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
                 
-                # Add rate limit notice to the response
-                if genai_text_response:
-                    genai_text_response = f"⚠️ *Image generation limit reached ({daily_count}/{config.DAILY_IMAGE_LIMIT} today). Providing text-only response.*\n\n{genai_text_response}"
-                else:
-                    genai_text_response = f"⚠️ **Daily image limit reached!** You've generated {daily_count}/{config.DAILY_IMAGE_LIMIT} images today. Here's a text-only response instead:"
+                # Do NOT add rate limit notice to the response (requirement #4)
             else:
                 # No content provided
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
@@ -270,6 +266,7 @@ async def process_generation_request(response_message, text_content: str, images
                 return
         
         # Track usage if we have metadata and a user
+        send_limit_warning = False
         if usage_metadata and user and not user.bot:  # Don't track bot usage
             try:
                 prompt_tokens = usage_metadata.get("prompt_token_count", 0)
@@ -285,6 +282,13 @@ async def process_generation_request(response_message, text_content: str, images
                     total_tokens=total_tokens,
                     images_generated=images_generated
                 )
+                
+                # Check if this was the user's 5th image today (and they're not elevated)
+                if (images_generated > 0 and 
+                    not usage_tracker.is_elevated_user(user.id) and
+                    daily_count_before + images_generated >= config.DAILY_IMAGE_LIMIT):
+                    send_limit_warning = True
+                    
             except Exception as e:
                 logger.warning(f"Could not track usage: {e}")
         
@@ -332,6 +336,23 @@ async def process_generation_request(response_message, text_content: str, images
                 await response_message.edit(content=None, attachments=files)
         else:
             await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
+        
+        # Send ephemeral warning message if user just hit their limit (requirement #4)
+        if send_limit_warning:
+            try:
+                # Get reset time (next day at midnight UTC)
+                from datetime import timezone
+                tomorrow = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                reset_timestamp = int(tomorrow.timestamp())
+                
+                warning_msg = (f"🚫 You've reached your daily image generation limit "
+                             f"({config.DAILY_IMAGE_LIMIT} images). Your limit will reset <t:{reset_timestamp}:R>.")
+                
+                # Try to send as ephemeral reply
+                if hasattr(response_message, 'channel'):
+                    await response_message.channel.send(warning_msg, delete_after=30)
+            except Exception as e:
+                logger.warning(f"Could not send limit warning: {e}")
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
@@ -371,8 +392,8 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
-• `/usage` - Show token usage statistics  
-• `/meme` - Generate a nonsensical meme using OpenAI"""
+• `/usage` - Show token usage statistics
+• `/reset` - Reset daily image usage for a user (elevated users only)"""
     
     await interaction.response.send_message(help_text)
 
@@ -436,72 +457,46 @@ async def usage_slash(interaction: discord.Interaction):
         logger.error(f"Error getting usage statistics: {e}")
         await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
 
-@bot.tree.command(name='meme', description='Generate a nonsensical meme using OpenAI')
-async def meme_slash(interaction: discord.Interaction):
-    """Generate a meme using OpenAI (slash command)."""
+@bot.tree.command(name='reset', description='Reset daily image usage for a user (elevated users only)')
+@app_commands.describe(user='The Discord user whose usage should be reset')
+async def reset_slash(interaction: discord.Interaction, user: discord.User):
+    """Reset daily image usage for a user (elevated users only)."""
     try:
-        # Check if user can generate images (rate limiting)
-        can_generate_images = usage_tracker.can_generate_image(interaction.user.id)
-        
-        if not can_generate_images:
-            daily_count = usage_tracker.get_daily_image_count(interaction.user.id)
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
             await interaction.response.send_message(
-                f"You've reached your daily image generation limit ({daily_count}/{config.DAILY_IMAGE_LIMIT}). "
-                "Try again tomorrow!"
+                "❌ You don't have permission to use this command. Only elevated users can reset usage.",
+                ephemeral=True
             )
             return
         
-        # Send initial response
-        await interaction.response.send_message("🎭 Generating a nonsensical meme... This might take a moment!")
+        # Attempt to reset the target user's usage
+        success = usage_tracker.reset_daily_usage(user.id)
         
-        # Generate the meme
-        try:
-            generated_image = await get_openai_image_generator().generate_meme()
+        if success:
+            # Get the user's current daily count after reset (should be 0)
+            new_count = usage_tracker.get_daily_image_count(user.id)
+            username = user.display_name or user.name
             
-            if generated_image:
-                # Save image to send as attachment
-                image_buffer = io.BytesIO()
-                generated_image.save(image_buffer, format='PNG')
-                image_buffer.seek(0)
-                
-                # Create Discord file
-                discord_file = discord.File(image_buffer, filename="meme.png")
-                
-                # Record usage (1 image generated)
-                usage_tracker.record_usage(
-                    user_id=interaction.user.id,
-                    username=interaction.user.display_name or interaction.user.name,
-                    prompt_tokens=0,  # OpenAI doesn't provide detailed token info for DALL-E
-                    output_tokens=0,
-                    total_tokens=0,
-                    images_generated=1
-                )
-                
-                await interaction.edit_original_response(
-                    content="🎭 Here's your nonsensical meme!",
-                    attachments=[discord_file]
-                )
-            else:
-                await interaction.edit_original_response(
-                    content="Sorry, I couldn't generate a meme right now. Please try again later."
-                )
-                
-        except Exception as e:
-            logger.error(f"Error generating meme: {e}")
-            await interaction.edit_original_response(
-                content="An error occurred while generating the meme. Please try again."
+            await interaction.response.send_message(
+                f"✅ Successfully reset daily image usage for **{username}** (ID: {user.id}). "
+                f"Their current daily count is now {new_count}/{config.DAILY_IMAGE_LIMIT}.",
+                ephemeral=True
+            )
+            logger.info(f"Elevated user {interaction.user.id} reset usage for user {user.id}")
+        else:
+            await interaction.response.send_message(
+                f"⚠️ Could not reset usage for **{user.display_name or user.name}** (ID: {user.id}). "
+                "This user may not have any recorded usage yet.",
+                ephemeral=True
             )
             
     except Exception as e:
-        logger.error(f"Error in meme command: {e}")
-        try:
-            await interaction.response.send_message("An error occurred. Please try again.")
-        except:
-            # If we can't send initial response, try to edit it
-            try:
-                await interaction.edit_original_response(content="An error occurred. Please try again.")
-            except:
-                pass
+        logger.error(f"Error in reset command: {e}")
+        await interaction.response.send_message(
+            "An error occurred while resetting user usage. Please try again.",
+            ephemeral=True
+        )
 
 
 

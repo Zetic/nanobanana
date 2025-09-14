@@ -165,14 +165,51 @@ class UsageTracker:
             return daily_images.get(today, 0)
     
     def can_generate_image(self, user_id: int) -> bool:
-        """Check if a user can generate an image today (within daily limit)."""
+        """Check if a user can generate an image today (within daily limit or is elevated user)."""
+        # Check if user is elevated (not bound by limitations)
+        if user_id in config.ELEVATED_USERS:
+            return True
+        
         daily_count = self.get_daily_image_count(user_id)
         return daily_count < config.DAILY_IMAGE_LIMIT
     
     def get_remaining_images_today(self, user_id: int) -> int:
         """Get the number of images a user can still generate today."""
+        # Elevated users have unlimited images
+        if user_id in config.ELEVATED_USERS:
+            return float('inf')
+        
         daily_count = self.get_daily_image_count(user_id)
         return max(0, config.DAILY_IMAGE_LIMIT - daily_count)
+    
+    def reset_daily_usage(self, user_id: int) -> bool:
+        """
+        Reset daily image usage for a specific user.
+        Returns True if successful, False if user not found.
+        """
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            if user_id_str not in data["users"]:
+                return False
+            
+            user_data = data["users"][user_id_str]
+            today = date.today().isoformat()
+            
+            # Reset today's image count
+            if "daily_images" not in user_data:
+                user_data["daily_images"] = {}
+            
+            user_data["daily_images"][today] = 0
+            
+            self._save_usage_data(data)
+            logger.info(f"Reset daily usage for user {user_id}")
+            return True
+    
+    def is_elevated_user(self, user_id: int) -> bool:
+        """Check if a user has elevated status."""
+        return user_id in config.ELEVATED_USERS
 
 # Global instance
 usage_tracker = UsageTracker()
