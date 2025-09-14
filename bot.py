@@ -85,6 +85,76 @@ def is_directly_mentioned(message_content, bot_user_id):
     
     return standard_mention in message_content or nickname_mention in message_content
 
+def split_long_message(content: str, max_length: int = 4000) -> List[str]:
+    """
+    Split a long message into chunks that fit within Discord's character limits.
+    
+    Args:
+        content: The content to split
+        max_length: Maximum length per chunk (default 4000 for Discord)
+    
+    Returns:
+        List of message chunks
+    """
+    if not content or len(content) <= max_length:
+        return [content] if content else []
+    
+    chunks = []
+    current_chunk = ""
+    
+    # Split by paragraphs first (double newlines)
+    paragraphs = content.split('\n\n')
+    
+    for paragraph in paragraphs:
+        # If adding this paragraph would exceed the limit
+        if len(current_chunk) + len(paragraph) + 2 > max_length:
+            # If current chunk has content, save it and start fresh
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            
+            # If the paragraph itself is too long, split by sentences
+            if len(paragraph) > max_length:
+                # Split by sentences (periods, exclamation marks, question marks)
+                import re
+                sentences = re.split(r'([.!?]+\s*)', paragraph)
+                
+                for i in range(0, len(sentences), 2):
+                    sentence = sentences[i]
+                    punctuation = sentences[i + 1] if i + 1 < len(sentences) else ""
+                    full_sentence = sentence + punctuation
+                    
+                    if len(current_chunk) + len(full_sentence) > max_length:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                            current_chunk = ""
+                    
+                    # If even a single sentence is too long, split by words
+                    if len(full_sentence) > max_length:
+                        words = full_sentence.split()
+                        for word in words:
+                            if len(current_chunk) + len(word) + 1 > max_length:
+                                if current_chunk:
+                                    chunks.append(current_chunk.strip())
+                                    current_chunk = ""
+                            current_chunk += (" " if current_chunk else "") + word
+                    else:
+                        current_chunk += (" " if current_chunk else "") + full_sentence
+            else:
+                current_chunk = paragraph
+        else:
+            # Add paragraph to current chunk
+            if current_chunk:
+                current_chunk += "\n\n" + paragraph
+            else:
+                current_chunk = paragraph
+    
+    # Add any remaining content
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
+
 async def extract_text_from_message(message):
     """Extract text content from a message, removing bot mentions."""
     content = message.content
@@ -258,7 +328,21 @@ async def process_generation_request(response_message, text_content: str, images
         # Edit response message with the final result
         if responses or files:
             content = "\n".join(responses) if responses else None
-            await response_message.edit(content=content, attachments=files)
+            
+            # Handle long messages by splitting them into chunks
+            if content:
+                message_chunks = split_long_message(content)
+                
+                # Edit the original response with the first chunk (and any files)
+                first_chunk = message_chunks[0] if message_chunks else None
+                await response_message.edit(content=first_chunk, attachments=files)
+                
+                # Send any additional chunks as follow-up messages
+                for chunk in message_chunks[1:]:
+                    await response_message.channel.send(content=chunk)
+            else:
+                # Only files, no content
+                await response_message.edit(content=None, attachments=files)
         else:
             await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
             
