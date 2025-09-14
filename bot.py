@@ -100,58 +100,45 @@ def split_long_message(content: str, max_length: int = 4000) -> List[str]:
         return [content] if content else []
     
     chunks = []
-    current_chunk = ""
+    remaining = content
     
-    # Split by paragraphs first (double newlines)
-    paragraphs = content.split('\n\n')
-    
-    for paragraph in paragraphs:
-        # If adding this paragraph would exceed the limit
-        if len(current_chunk) + len(paragraph) + 2 > max_length:
-            # If current chunk has content, save it and start fresh
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-                current_chunk = ""
-            
-            # If the paragraph itself is too long, split by sentences
-            if len(paragraph) > max_length:
-                # Split by sentences (periods, exclamation marks, question marks)
-                import re
-                sentences = re.split(r'([.!?]+\s*)', paragraph)
-                
-                for i in range(0, len(sentences), 2):
-                    sentence = sentences[i]
-                    punctuation = sentences[i + 1] if i + 1 < len(sentences) else ""
-                    full_sentence = sentence + punctuation
-                    
-                    if len(current_chunk) + len(full_sentence) > max_length:
-                        if current_chunk:
-                            chunks.append(current_chunk.strip())
-                            current_chunk = ""
-                    
-                    # If even a single sentence is too long, split by words
-                    if len(full_sentence) > max_length:
-                        words = full_sentence.split()
-                        for word in words:
-                            if len(current_chunk) + len(word) + 1 > max_length:
-                                if current_chunk:
-                                    chunks.append(current_chunk.strip())
-                                    current_chunk = ""
-                            current_chunk += (" " if current_chunk else "") + word
-                    else:
-                        current_chunk += (" " if current_chunk else "") + full_sentence
-            else:
-                current_chunk = paragraph
+    while len(remaining) > max_length:
+        # Find the best split point within the limit
+        split_point = max_length
+        
+        # Try to split at paragraph boundaries first (double newlines)
+        paragraph_split = remaining.rfind('\n\n', 0, max_length)
+        if paragraph_split > max_length // 2:  # Don't split too early
+            split_point = paragraph_split + 2
         else:
-            # Add paragraph to current chunk
-            if current_chunk:
-                current_chunk += "\n\n" + paragraph
+            # Try to split at sentence boundaries
+            sentence_split = max(
+                remaining.rfind('. ', 0, max_length),
+                remaining.rfind('! ', 0, max_length),
+                remaining.rfind('? ', 0, max_length)
+            )
+            if sentence_split > max_length // 2:
+                split_point = sentence_split + 2
             else:
-                current_chunk = paragraph
+                # Try to split at word boundaries
+                word_split = remaining.rfind(' ', 0, max_length)
+                if word_split > max_length // 2:
+                    split_point = word_split + 1
+                else:
+                    # Force split at character boundary
+                    split_point = max_length
+        
+        # Extract the chunk and add it
+        chunk = remaining[:split_point].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # Move to the next part
+        remaining = remaining[split_point:].strip()
     
-    # Add any remaining content
-    if current_chunk:
-        chunks.append(current_chunk.strip())
+    # Add the final chunk if there's remaining content
+    if remaining:
+        chunks.append(remaining)
     
     return chunks
 
