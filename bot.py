@@ -85,6 +85,63 @@ def is_directly_mentioned(message_content, bot_user_id):
     
     return standard_mention in message_content or nickname_mention in message_content
 
+def split_long_message(content: str, max_length: int = 4000) -> List[str]:
+    """
+    Split a long message into chunks that fit within Discord's character limits.
+    
+    Args:
+        content: The content to split
+        max_length: Maximum length per chunk (default 4000 for Discord)
+    
+    Returns:
+        List of message chunks
+    """
+    if not content or len(content) <= max_length:
+        return [content] if content else []
+    
+    chunks = []
+    remaining = content
+    
+    while len(remaining) > max_length:
+        # Find the best split point within the limit
+        split_point = max_length
+        
+        # Try to split at paragraph boundaries first (double newlines)
+        paragraph_split = remaining.rfind('\n\n', 0, max_length)
+        if paragraph_split > max_length // 2:  # Don't split too early
+            split_point = paragraph_split + 2
+        else:
+            # Try to split at sentence boundaries
+            sentence_split = max(
+                remaining.rfind('. ', 0, max_length),
+                remaining.rfind('! ', 0, max_length),
+                remaining.rfind('? ', 0, max_length)
+            )
+            if sentence_split > max_length // 2:
+                split_point = sentence_split + 2
+            else:
+                # Try to split at word boundaries
+                word_split = remaining.rfind(' ', 0, max_length)
+                if word_split > max_length // 2:
+                    split_point = word_split + 1
+                else:
+                    # Force split at character boundary
+                    split_point = max_length
+        
+        # Extract the chunk and add it
+        chunk = remaining[:split_point].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # Move to the next part
+        remaining = remaining[split_point:].strip()
+    
+    # Add the final chunk if there's remaining content
+    if remaining:
+        chunks.append(remaining)
+    
+    return chunks
+
 async def extract_text_from_message(message):
     """Extract text content from a message, removing bot mentions."""
     content = message.content
@@ -258,7 +315,21 @@ async def process_generation_request(response_message, text_content: str, images
         # Edit response message with the final result
         if responses or files:
             content = "\n".join(responses) if responses else None
-            await response_message.edit(content=content, attachments=files)
+            
+            # Handle long messages by splitting them into chunks
+            if content:
+                message_chunks = split_long_message(content)
+                
+                # Edit the original response with the first chunk (and any files)
+                first_chunk = message_chunks[0] if message_chunks else None
+                await response_message.edit(content=first_chunk, attachments=files)
+                
+                # Send any additional chunks as follow-up messages
+                for chunk in message_chunks[1:]:
+                    await response_message.channel.send(content=chunk)
+            else:
+                # Only files, no content
+                await response_message.edit(content=None, attachments=files)
         else:
             await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
             
