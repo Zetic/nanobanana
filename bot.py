@@ -85,13 +85,13 @@ def is_directly_mentioned(message_content, bot_user_id):
     
     return standard_mention in message_content or nickname_mention in message_content
 
-def split_long_message(content: str, max_length: int = 4000) -> List[str]:
+def split_long_message(content: str, max_length: int = 1800) -> List[str]:
     """
     Split a long message into chunks that fit within Discord's character limits.
     
     Args:
         content: The content to split
-        max_length: Maximum length per chunk (default 4000 for Discord)
+        max_length: Maximum length per chunk (default 1800 for Discord's 2000 char limit with safety margin)
     
     Returns:
         List of message chunks
@@ -318,7 +318,7 @@ async def process_generation_request(response_message, text_content: str, images
             
             # Handle long messages by splitting them into chunks
             if content:
-                message_chunks = split_long_message(content)
+                message_chunks = split_long_message(content, max_length=1800)
                 
                 # Edit the original response with the first chunk (and any files)
                 first_chunk = message_chunks[0] if message_chunks else None
@@ -421,12 +421,16 @@ async def usage_slash(interaction: discord.Interaction):
         if len(users_list) > 10:
             usage_text += f"... and {len(users_list) - 10} more users.\n"
         
-        # Check if message is too long for Discord (2000 char limit)
-        if len(usage_text) > 1950:
-            # Truncate and add note
-            usage_text = usage_text[:1900] + "\n\n*Message truncated due to length limit.*"
+        # Handle long messages by splitting them into chunks
+        message_chunks = split_long_message(usage_text, max_length=1800)
         
-        await interaction.response.send_message(usage_text)
+        # Send the first chunk as the response
+        first_chunk = message_chunks[0] if message_chunks else usage_text
+        await interaction.response.send_message(first_chunk)
+        
+        # Send any additional chunks as follow-up messages
+        for chunk in message_chunks[1:]:
+            await interaction.followup.send(chunk)
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
