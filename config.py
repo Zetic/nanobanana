@@ -20,7 +20,7 @@ MAX_IMAGES = 10  # Maximum number of images to process
 GENERATED_IMAGES_DIR = 'generated_images'
 
 # Rate limiting configuration
-DAILY_IMAGE_LIMIT = 5  # Maximum images per user per day
+DAILY_IMAGE_LIMIT = 15  # Maximum images per user per cycle (resets at noon and midnight)
 
 # Elevated users configuration (Discord IDs)
 # Users in this list are not bound by usage limitations and can use special commands
