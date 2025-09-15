@@ -103,8 +103,15 @@ The bot automatically tracks token usage for each Discord user:
 - **Input tokens**: Tokens used for prompts and image inputs
 - **Output tokens**: Tokens used for generated responses  
 - **Total tokens**: Combined input and output tokens
-- **Images generated**: Number of images created
+- **Images generated**: Number of images created (limited to 15 per cycle)
 - **Request count**: Total number of requests made
+
+**Image Generation Limits:**
+- Users can generate up to **15 images per cycle**
+- Cycles reset at **noon (12:00 PM)** and **midnight (00:00 AM)**
+- Morning cycle: 00:00 - 11:59
+- Afternoon cycle: 12:00 - 23:59
+- Elevated users have unlimited image generation
 
 Use `/usage` to view statistics sorted by output token usage. Data is stored locally in JSON format with thread-safe operations for concurrent access.
 
