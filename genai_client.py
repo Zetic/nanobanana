@@ -8,6 +8,20 @@ import config
 
 logger = logging.getLogger(__name__)
 
+def extract_api_error_message(e: Exception) -> str:
+    """Extract informative error message from GenAI API exceptions."""
+    if isinstance(e, (genai.errors.APIError, genai.errors.ClientError, genai.errors.ServerError)):
+        # Extract message from GenAI API errors
+        if hasattr(e, 'message') and e.message:
+            return str(e.message)
+        elif hasattr(e, 'status') and e.status:
+            return f"API Error (Status {e.status}): {str(e)}"
+        else:
+            return str(e)
+    else:
+        # For other exceptions, return the string representation
+        return str(e)
+
 class ImageGenerator:
     """Handles Google GenAI image generation."""
     
@@ -34,8 +48,9 @@ class ImageGenerator:
             return image, text, usage
             
         except Exception as e:
-            logger.error(f"Error generating image from text: {e}")
-            return None, None, None
+            error_message = extract_api_error_message(e)
+            logger.error(f"Error generating image from text: {error_message}")
+            return None, error_message, None
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
@@ -51,8 +66,9 @@ class ImageGenerator:
             return image, text, usage
             
         except Exception as e:
-            logger.error(f"Error generating image from text and image: {e}")
-            return None, None, None
+            error_message = extract_api_error_message(e)
+            logger.error(f"Error generating image from text and image: {error_message}")
+            return None, error_message, None
     
     async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -71,8 +87,9 @@ class ImageGenerator:
             return image, text, usage
             
         except Exception as e:
-            logger.error(f"Error generating image from image only: {e}")
-            return None, None, None
+            error_message = extract_api_error_message(e)
+            logger.error(f"Error generating image from image only: {error_message}")
+            return None, error_message, None
     
     async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -108,8 +125,9 @@ class ImageGenerator:
             return image, text, usage
             
         except Exception as e:
-            logger.error(f"Error generating image from images only: {e}")
-            return None, None, None
+            error_message = extract_api_error_message(e)
+            logger.error(f"Error generating image from images only: {error_message}")
+            return None, error_message, None
 
     async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata)."""
@@ -142,8 +160,9 @@ class ImageGenerator:
             return image, text, usage
             
         except Exception as e:
-            logger.error(f"Error generating image from text and multiple images: {e}")
-            return None, None, None
+            error_message = extract_api_error_message(e)
+            logger.error(f"Error generating image from text and multiple images: {error_message}")
+            return None, error_message, None
 
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata)."""
@@ -167,8 +186,9 @@ class ImageGenerator:
             return None, text, usage
             
         except Exception as e:
-            logger.error(f"Error generating text-only response: {e}")
-            return None, None, None
+            error_message = extract_api_error_message(e)
+            logger.error(f"Error generating text-only response: {error_message}")
+            return None, error_message, None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
         """Extract image from GenAI response."""
