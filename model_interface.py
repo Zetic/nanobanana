@@ -237,20 +237,19 @@ class GPTModelGenerator(BaseModelGenerator):
             for event in stream:
                 if event.type == "image_generation.partial_image":
                     partial_count += 1
-                    # We could save partial images but for now just track them
-                    logger.info(f"Received partial image {partial_count}/3")
+                    # Log partial image received (could save them if needed)
+                    logger.info(f"Received partial image {event.partial_image_index + 1}/3")
+                    
+                    # Could save partial images like in the example:
+                    # image_base64 = event.b64_json
+                    # image_bytes = base64.b64decode(image_base64)
+                    # with open(f"partial_{event.partial_image_index}.png", "wb") as f:
+                    #     f.write(image_bytes)
                 elif event.type == "image_generation.done":
                     # Final image
-                    if hasattr(event, 'b64_json'):
-                        image_base64 = event.b64_json
-                        image_bytes = base64.b64decode(image_base64)
-                        generated_image = Image.open(io.BytesIO(image_bytes))
-                    elif hasattr(event, 'data') and event.data:
-                        # Try to get from data array
-                        if len(event.data) > 0 and hasattr(event.data[0], 'b64_json'):
-                            image_base64 = event.data[0].b64_json
-                            image_bytes = base64.b64decode(image_base64)
-                            generated_image = Image.open(io.BytesIO(image_bytes))
+                    image_base64 = event.b64_json
+                    image_bytes = base64.b64decode(image_base64)
+                    generated_image = Image.open(io.BytesIO(image_bytes))
             
             # If streaming didn't work, fall back to non-streaming
             if generated_image is None:
@@ -284,18 +283,21 @@ class GPTModelGenerator(BaseModelGenerator):
     async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image using input images for editing/reference."""
         try:
-            # Convert PIL images to bytes for the API
+            # Convert PIL images to binary format for the API
+            # According to the example, the API expects file-like objects
             image_files = []
             for i, img in enumerate(input_images):
                 img_buffer = io.BytesIO()
                 img.save(img_buffer, format='PNG')
                 img_buffer.seek(0)
+                # The API expects file-like objects that can be read
                 image_files.append(img_buffer)
             
             # Use the images.edit API for image-based generation
+            # Based on the example: client.images.edit(model="gpt-image-1", image=[open("file.png", "rb"), ...], prompt=prompt)
             response = self.client.images.edit(
                 model=self.model,
-                image=image_files,  # List of image buffers
+                image=image_files,  # List of BytesIO objects (file-like)
                 prompt=prompt,
                 quality="medium"
             )
@@ -306,7 +308,7 @@ class GPTModelGenerator(BaseModelGenerator):
                 image_bytes = base64.b64decode(image_base64)
                 generated_image = Image.open(io.BytesIO(image_bytes))
             
-            # Return just the prompt as text response
+            # Return just the prompt as text response (matching issue requirements)
             text_response = prompt
             
             # Create usage metadata
