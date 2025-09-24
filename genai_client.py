@@ -15,7 +15,25 @@ def extract_api_error_message(e: Exception) -> str:
         if hasattr(e, 'message') and e.message:
             return str(e.message)
         elif hasattr(e, 'status') and e.status:
-            return f"API Error (Status {e.status}): {str(e)}"
+            # Provide helpful context for common error codes
+            status = e.status
+            error_str = str(e)
+            if status == 400:
+                return f"Bad Request: {error_str}"
+            elif status == 403:
+                return f"Permission Denied: {error_str}"
+            elif status == 404:
+                return f"Not Found: {error_str}"
+            elif status == 429:
+                return f"Rate Limit Exceeded: {error_str}"
+            elif status == 500:
+                return f"Internal Server Error: {error_str}"
+            elif status == 503:
+                return f"Service Unavailable: {error_str}"
+            elif status == 504:
+                return f"Timeout: {error_str}"
+            else:
+                return f"API Error (Status {status}): {error_str}"
         else:
             return str(e)
     else:
