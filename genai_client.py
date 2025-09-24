@@ -35,8 +35,7 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text: {e}")
-            error_message = self._extract_error_message(e)
-            return None, error_message, None
+            return None, None, None
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
@@ -53,8 +52,7 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and image: {e}")
-            error_message = self._extract_error_message(e)
-            return None, error_message, None
+            return None, None, None
     
     async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -74,8 +72,7 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
-            error_message = self._extract_error_message(e)
-            return None, error_message, None
+            return None, None, None
     
     async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -112,8 +109,7 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from images only: {e}")
-            error_message = self._extract_error_message(e)
-            return None, error_message, None
+            return None, None, None
 
     async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata)."""
@@ -147,8 +143,7 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and multiple images: {e}")
-            error_message = self._extract_error_message(e)
-            return None, error_message, None
+            return None, None, None
 
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata)."""
@@ -173,8 +168,7 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating text-only response: {e}")
-            error_message = self._extract_error_message(e)
-            return None, error_message, None
+            return None, None, None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
         """Extract image from GenAI response."""
@@ -235,22 +229,3 @@ class ImageGenerator:
                 "total_token_count": 0,
                 "cached_content_token_count": 0,
             }
-
-    def _extract_error_message(self, exception: Exception) -> str:
-        """Extract informative error message from API exceptions."""
-        try:
-            # Check if it's a Google GenAI API error with a message attribute
-            if hasattr(exception, 'message') and exception.message:
-                return f"API Error: {exception.message}"
-            
-            # Check if it's a string representation that might be informative
-            error_str = str(exception)
-            if error_str and error_str.strip() and error_str != 'None':
-                return f"Error: {error_str}"
-                
-            # Fallback to generic message if no useful error info
-            return "An unexpected error occurred. Please try again with different input."
-            
-        except Exception:
-            # If anything goes wrong extracting the error message, use fallback
-            return "An unexpected error occurred. Please try again with different input."
