@@ -282,7 +282,7 @@ async def process_generation_request(response_message, text_content: str, images
                         await response_message.edit(content="Sorry, I couldn't generate an image using the GPT model right now. Please try again later or switch to a different model using `/model`.")
                         return
                     
-        else:
+        elif user_model == "nanobanana":
             # Default "nanobanana" model - use Gemini
             if not can_generate_images:
                 # User is rate limited for images - use text-only fallback
@@ -322,6 +322,26 @@ async def process_generation_request(response_message, text_content: str, images
                     generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
                 else:
                     # No content provided
+                    await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                    return
+        else:
+            # Unknown model - fallback to default behavior with warning
+            logger.warning(f"Unknown model preference '{user_model}' for user {user.id}, using default nanobanana model")
+            # Set user preference back to default
+            usage_tracker.set_user_model_preference(user.id, user.display_name or user.name, "nanobanana")
+            
+            # Use default nanobanana behavior
+            if not can_generate_images:
+                if text_content.strip() or images:
+                    prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
+                else:
+                    await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                    return
+            else:
+                if text_content.strip():
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+                else:
                     await response_message.edit(content="Please provide some text or attach an image for me to work with!")
                     return
         
@@ -660,43 +680,62 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
 
 
 @bot.tree.command(name='model', description='Switch between AI models for your generations')
-@app_commands.describe(model='The AI model to use for your generations')
+@app_commands.describe(model='The AI model to use for your generations (leave empty to see current model)')
 @app_commands.choices(model=[
     app_commands.Choice(name='Nanobanana (Gemini - Default)', value='nanobanana'),
     app_commands.Choice(name='GPT (OpenAI Image Generation)', value='gpt'),
     app_commands.Choice(name='Chat (Text-Only Responses)', value='chat')
 ])
-async def model_slash(interaction: discord.Interaction, model: app_commands.Choice[str]):
+async def model_slash(interaction: discord.Interaction, model: app_commands.Choice[str] = None):
     """Switch between AI models for your generations."""
     try:
-        model_value = model.value
         username = interaction.user.display_name or interaction.user.name
+        current_model = usage_tracker.get_user_model_preference(interaction.user.id)
         
-        # Set the user's model preference
-        success = usage_tracker.set_user_model_preference(interaction.user.id, username, model_value)
-        
-        if success:
+        if model is None:
+            # Show current model preference
             model_descriptions = {
                 'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
-                'gpt': 'GPT - Image generation using OpenAI\'s models',
+                'gpt': 'GPT - Image generation using OpenAI\'s models', 
                 'chat': 'Chat - Text-only responses without image generation'
             }
             
-            description = model_descriptions.get(model_value, model_value)
+            current_description = model_descriptions.get(current_model, current_model)
             await interaction.response.send_message(
-                f"✅ **Model preference updated!**\n\n"
-                f"Your selected model: **{model.name}**\n"
-                f"Description: {description}\n\n"
-                f"All your future generations will now use this model until you change it again.",
+                f"**Your current AI model:**\n\n"
+                f"🤖 **{current_model.title()}**\n"
+                f"📝 {current_description}\n\n"
+                f"To change your model, use `/model` and select a different option.",
                 ephemeral=True
             )
-            logger.info(f"User {username} ({interaction.user.id}) changed model preference to: {model_value}")
         else:
-            await interaction.response.send_message(
-                "❌ **Error updating model preference**\n\n"
-                "There was an issue saving your model preference. Please try again.",
-                ephemeral=True
-            )
+            # Set new model preference
+            model_value = model.value
+            success = usage_tracker.set_user_model_preference(interaction.user.id, username, model_value)
+            
+            if success:
+                model_descriptions = {
+                    'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
+                    'gpt': 'GPT - Image generation using OpenAI\'s models',
+                    'chat': 'Chat - Text-only responses without image generation'
+                }
+                
+                description = model_descriptions.get(model_value, model_value)
+                await interaction.response.send_message(
+                    f"✅ **Model preference updated!**\n\n"
+                    f"Previous model: **{current_model.title()}**\n"
+                    f"New model: **{model.name}**\n"
+                    f"Description: {description}\n\n"
+                    f"All your future generations will now use this model until you change it again.",
+                    ephemeral=True
+                )
+                logger.info(f"User {username} ({interaction.user.id}) changed model preference from {current_model} to: {model_value}")
+            else:
+                await interaction.response.send_message(
+                    "❌ **Error updating model preference**\n\n"
+                    "There was an issue saving your model preference. Please try again.",
+                    ephemeral=True
+                )
             
     except Exception as e:
         logger.error(f"Error in model command: {e}")

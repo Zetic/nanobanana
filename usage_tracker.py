@@ -245,15 +245,29 @@ class UsageTracker:
         return user_id in config.ELEVATED_USERS
     
     def get_user_model_preference(self, user_id: int) -> str:
-        """Get the model preference for a specific user. Returns 'nanobanana' if not set."""
+        """Get the model preference for a specific user. Returns 'nanobanana' if not set or invalid."""
         with self._lock:
             data = self._load_usage_data()
             user_id_str = str(user_id)
             user_data = data["users"].get(user_id_str, {})
-            return user_data.get("model_preference", "nanobanana")
+            model = user_data.get("model_preference", "nanobanana")
+            
+            # Validate and return default if invalid
+            valid_models = {'nanobanana', 'gpt', 'chat'}
+            if model not in valid_models:
+                logger.warning(f"Invalid model preference '{model}' for user {user_id}, defaulting to 'nanobanana'")
+                return "nanobanana"
+            
+            return model
     
     def set_user_model_preference(self, user_id: int, username: str, model: str) -> bool:
         """Set the model preference for a specific user. Returns True if successful."""
+        # Validate model value
+        valid_models = {'nanobanana', 'gpt', 'chat'}
+        if model not in valid_models:
+            logger.warning(f"Invalid model preference '{model}' for user {user_id}. Must be one of: {valid_models}")
+            return False
+            
         try:
             with self._lock:
                 data = self._load_usage_data()
