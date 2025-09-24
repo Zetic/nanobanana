@@ -2,7 +2,7 @@ import io
 import logging
 from PIL import Image
 import openai
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 import config
 
 logger = logging.getLogger(__name__)
@@ -16,8 +16,8 @@ class OpenAIImageGenerator:
         
         self.client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
     
-    async def generate_meme(self) -> Tuple[Optional[Image.Image], Optional[str]]:
-        """Generate a meme using the hardcoded prompt. Returns (image, error_message)."""
+    async def generate_meme(self) -> Optional[Image.Image]:
+        """Generate a meme using the hardcoded prompt."""
         try:
             # Fixed prompt as specified in the issue
             prompt = "generate a single image meme that makes no sense. it can be borderline offsve"
@@ -39,11 +39,10 @@ class OpenAIImageGenerator:
                 async with session.get(image_url) as resp:
                     if resp.status == 200:
                         image_data = await resp.read()
-                        return Image.open(io.BytesIO(image_data)), None
+                        return Image.open(io.BytesIO(image_data))
             
-            return None, "Failed to download generated image"
+            return None
             
         except Exception as e:
             logger.error(f"Error generating meme with OpenAI: {e}")
-            # Return the API error message
-            return None, str(e)
+            return None
