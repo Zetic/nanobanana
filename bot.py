@@ -32,9 +32,6 @@ bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_c
 image_generator = None
 openai_image_generator = None
 
-# Failsafe timeout for generation requests (in seconds)
-GENERATION_TIMEOUT = 300  # 5 minutes
-
 def get_image_generator():
     """Get or create the image generator instance."""
     global image_generator
@@ -159,7 +156,6 @@ async def extract_text_from_message(message):
 
 async def handle_generation_request(message):
     """Handle image generation request when bot is mentioned."""
-    response_message = None
     try:
         # Send immediate response
         response_message = await message.reply("Generating response...")
@@ -202,36 +198,17 @@ async def handle_generation_request(message):
                 logger.error(f"Error fetching original message: {e}")
                 # Continue processing even if we can't fetch the original message
         
-        # Process based on inputs with timeout failsafe
-        try:
-            await asyncio.wait_for(
-                process_generation_request(response_message, text_content, images, message.author),
-                timeout=GENERATION_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"Generation request timed out after {GENERATION_TIMEOUT} seconds")
-            await response_message.edit(content="The request timed out. The service may be overloaded. Please try again later.")
-            return
+        # Process based on inputs
+        await process_generation_request(response_message, text_content, images, message.author)
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
-        
-        # Extract meaningful error message from the exception if possible
-        if hasattr(e, 'message') and e.message:
-            error_msg = e.message
-        else:
-            error_str = str(e)
-            if error_str and error_str != str(type(e)):
-                error_msg = error_str
-            else:
-                error_msg = "The request could not be processed. Please try again."
-        
         try:
             # Try to edit the response message if it exists, otherwise reply to original
-            if response_message:
-                await response_message.edit(content=error_msg)
+            if 'response_message' in locals():
+                await response_message.edit(content="An error occurred while processing your request. Please try again.")
             else:
-                await message.reply(error_msg)
+                await message.reply("An error occurred while processing your request. Please try again.")
         except:
             pass
 
@@ -358,15 +335,7 @@ async def process_generation_request(response_message, text_content: str, images
                 # Only files, no content
                 await response_message.edit(content=None, attachments=files)
         else:
-            # Check if we got any response from the API
-            if genai_text_response and genai_text_response.strip():
-                # We have a text response (which might be an error message from API)
-                await response_message.edit(content=genai_text_response)
-            else:
-                # No response from API - this indicates a complete failure
-                # Add timeout check to avoid infinite "Generating response..." state
-                await response_message.edit(content="The API did not return any response. Please check your request and try again.")
-        
+            await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
         
         # Send ephemeral warning message if user just hit their limit (requirement #4)
         if send_limit_warning:
@@ -385,17 +354,7 @@ async def process_generation_request(response_message, text_content: str, images
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
-        # Extract meaningful error message from the exception if possible
-        if hasattr(e, 'message') and e.message:
-            error_msg = e.message
-        else:
-            error_str = str(e)
-            if error_str and error_str != str(type(e)):
-                error_msg = error_str
-            else:
-                error_msg = "The request could not be processed. Please try again."
-        
-        await response_message.edit(content=error_msg)
+        await response_message.edit(content="An error occurred while generating. Please try again.")
 
 
 
@@ -494,17 +453,7 @@ async def usage_slash(interaction: discord.Interaction):
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
-        # Extract meaningful error message from the exception if possible
-        if hasattr(e, 'message') and e.message:
-            error_msg = f"Error retrieving usage statistics: {e.message}"
-        else:
-            error_str = str(e)
-            if error_str and error_str != str(type(e)):
-                error_msg = f"Error retrieving usage statistics: {error_str}"
-            else:
-                error_msg = "Unable to retrieve usage statistics at this time."
-        
-        await interaction.response.send_message(error_msg)
+        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
 
 @bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')
@@ -542,18 +491,8 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
             
     except Exception as e:
         logger.error(f"Error in reset command: {e}")
-        # Extract meaningful error message from the exception if possible
-        if hasattr(e, 'message') and e.message:
-            error_msg = f"Error resetting user usage: {e.message}"
-        else:
-            error_str = str(e)
-            if error_str and error_str != str(type(e)):
-                error_msg = f"Error resetting user usage: {error_str}"
-            else:
-                error_msg = "Unable to reset user usage at this time."
-        
         await interaction.response.send_message(
-            error_msg,
+            "An error occurred while resetting user usage. Please try again.",
             ephemeral=True
         )
 
