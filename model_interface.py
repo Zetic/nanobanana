@@ -210,87 +210,198 @@ class GeminiModelGenerator(BaseModelGenerator):
 
 
 class GPTModelGenerator(BaseModelGenerator):
-    """Handles OpenAI GPT-5 generation using the new API structure."""
+    """Handles OpenAI image generation using the gpt-image-1 model."""
     
     def __init__(self):
         if not config.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
         
         self.client = OpenAI(api_key=config.OPENAI_API_KEY)
-        self.model = "gpt-5"
+        self.model = "gpt-image-1"
     
-    async def _generate_with_gpt5(self, input_text: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate content using GPT-5 with image generation tools."""
+    async def _generate_image_only(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate image from text prompt using OpenAI Image API with streaming."""
         try:
-            response = self.client.responses.create(
+            # Use streaming generation with partial images
+            stream = self.client.images.generate(
                 model=self.model,
-                input=input_text,
-                tools=[{"type": "image_generation"}],
+                prompt=prompt,
+                quality="medium",
+                stream=True,
+                partial_images=3,
             )
             
-            # Extract image data
-            image_data = [
-                output.result
-                for output in response.output
-                if output.type == "image_generation_call"
-            ]
-            
             generated_image = None
-            if image_data:
-                image_base64 = image_data[0]
-                image_bytes = base64.b64decode(image_base64)
-                generated_image = Image.open(io.BytesIO(image_bytes))
+            partial_count = 0
             
-            # Generate simple text response
-            text_response = f"Generated image using GPT-5 based on: {input_text}"
+            for event in stream:
+                if event.type == "image_generation.partial_image":
+                    partial_count += 1
+                    # Log partial image received (could save them if needed)
+                    logger.info(f"Received partial image {event.partial_image_index + 1}/3")
+                    
+                    # Could save partial images like in the example:
+                    # image_base64 = event.b64_json
+                    # image_bytes = base64.b64decode(image_base64)
+                    # with open(f"partial_{event.partial_image_index}.png", "wb") as f:
+                    #     f.write(image_bytes)
+                elif event.type == "image_generation.done":
+                    # Final image
+                    image_base64 = event.b64_json
+                    image_bytes = base64.b64decode(image_base64)
+                    generated_image = Image.open(io.BytesIO(image_bytes))
             
-            # Create usage metadata (placeholder since GPT-5 API structure is not fully defined)
+            # If streaming didn't work, fall back to non-streaming
+            if generated_image is None:
+                logger.info("Streaming failed, falling back to non-streaming generation")
+                response = self.client.images.generate(
+                    model=self.model,
+                    prompt=prompt,
+                    quality="medium"
+                )
+                if response.data and len(response.data) > 0:
+                    image_base64 = response.data[0].b64_json
+                    image_bytes = base64.b64decode(image_base64)
+                    generated_image = Image.open(io.BytesIO(image_bytes))
+            
+            # Return just the prompt as text response (as requested in issue)
+            text_response = prompt
+            
+            # Create usage metadata
             usage_metadata = {
-                "prompt_token_count": len(input_text.split()) * 2,  # Rough estimate
-                "candidates_token_count": 10,  # Placeholder
-                "total_token_count": len(input_text.split()) * 2 + 10,
+                "prompt_token_count": len(prompt.split()) * 1.3,  # Rough estimate for image prompts
+                "candidates_token_count": 0,  # No text generation
+                "total_token_count": len(prompt.split()) * 1.3,
             }
             
             return generated_image, text_response, usage_metadata
             
         except Exception as e:
-            logger.error(f"Error generating with GPT-5: {e}")
+            logger.error(f"Error generating image with gpt-image-1: {e}")
+            return None, None, None
+    
+    async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate image using input images for editing/reference with streaming."""
+        try:
+            # Convert PIL images to binary format for the API
+            # According to the example, the API expects file-like objects
+            image_files = []
+            for i, img in enumerate(input_images):
+                img_buffer = io.BytesIO()
+                img.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                # The API expects file-like objects that can be read
+                image_files.append(img_buffer)
+            
+            # Try streaming first - images.edit API also supports streaming
+            try:
+                stream = self.client.images.edit(
+                    model=self.model,
+                    image=image_files,  # List of BytesIO objects (file-like)
+                    prompt=prompt,
+                    quality="medium",
+                    stream=True,
+                    partial_images=3,
+                )
+                
+                generated_image = None
+                partial_count = 0
+                
+                for event in stream:
+                    if event.type == "image_generation.partial_image":
+                        partial_count += 1
+                        # Log partial image received for image editing
+                        logger.info(f"Received partial edited image {event.partial_image_index + 1}/3")
+                    elif event.type == "image_generation.done":
+                        # Final edited image
+                        image_base64 = event.b64_json
+                        image_bytes = base64.b64decode(image_base64)
+                        generated_image = Image.open(io.BytesIO(image_bytes))
+                
+                # If streaming worked, return the result
+                if generated_image is not None:
+                    text_response = prompt
+                    usage_metadata = {
+                        "prompt_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,
+                        "candidates_token_count": 0,
+                        "total_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,
+                    }
+                    return generated_image, text_response, usage_metadata
+            
+            except Exception as streaming_error:
+                logger.info(f"Streaming failed for image editing, falling back to non-streaming: {streaming_error}")
+            
+            # Fallback to non-streaming if streaming failed
+            # Need to recreate image files since they may have been consumed
+            image_files = []
+            for i, img in enumerate(input_images):
+                img_buffer = io.BytesIO()
+                img.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                image_files.append(img_buffer)
+            
+            response = self.client.images.edit(
+                model=self.model,
+                image=image_files,  # List of BytesIO objects (file-like)
+                prompt=prompt,
+                quality="medium"
+            )
+            
+            generated_image = None
+            if response.data and len(response.data) > 0:
+                image_base64 = response.data[0].b64_json
+                image_bytes = base64.b64decode(image_base64)
+                generated_image = Image.open(io.BytesIO(image_bytes))
+            
+            # Return just the prompt as text response (matching issue requirements)
+            text_response = prompt
+            
+            # Create usage metadata
+            usage_metadata = {
+                "prompt_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,  # Account for image processing
+                "candidates_token_count": 0,
+                "total_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,
+            }
+            
+            return generated_image, text_response, usage_metadata
+            
+        except Exception as e:
+            logger.error(f"Error generating image with input images: {e}")
             return None, None, None
     
     async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
-        return await self._generate_with_gpt5(f"Generate an image: {prompt}")
+        return await self._generate_image_only(prompt)
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image."""
-        # GPT-5 doesn't support image input in this API structure, so we'll use text only
-        combined_prompt = f"Generate an image based on this description and the provided context: {prompt}"
-        return await self._generate_with_gpt5(combined_prompt)
+        return await self._generate_image_with_input_images(prompt, [input_image])
     
     async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only."""
-        # Since GPT-5 API doesn't accept image input in this structure, use a generic prompt
-        generic_prompt = "Generate a creative and interesting image"
-        return await self._generate_with_gpt5(generic_prompt)
+        # Use a generic creative prompt for image-only generation
+        generic_prompt = "Transform this image in a creative and interesting way"
+        return await self._generate_image_with_input_images(generic_prompt, [input_image])
     
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
-        """Generate text-only response."""
+        """Generate text-only response. GPT Image API doesn't support text-only, so return a simple response."""
         try:
-            # For text-only, we'll simulate a response without image generation
-            response_text = f"Text-only response: {prompt}"
+            # Since this is the image model, we can't generate text-only responses
+            # Return a simple acknowledgment
+            response_text = f"I understand you want: {prompt}"
             if input_images:
-                response_text += " [Note: Image(s) were provided but cannot be processed in text-only mode.]"
+                response_text += f" [Note: {len(input_images)} image(s) were provided but I can only generate images, not analyze them in text-only mode.]"
             
             usage_metadata = {
-                "prompt_token_count": len(prompt.split()) * 2,
+                "prompt_token_count": len(prompt.split()),
                 "candidates_token_count": len(response_text.split()),
-                "total_token_count": len(prompt.split()) * 2 + len(response_text.split()),
+                "total_token_count": len(prompt.split()) + len(response_text.split()),
             }
             
             return None, response_text, usage_metadata
             
         except Exception as e:
-            logger.error(f"Error generating text-only response with GPT-5: {e}")
+            logger.error(f"Error generating text-only response: {e}")
             return None, None, None
 
 
