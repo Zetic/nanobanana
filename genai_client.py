@@ -264,7 +264,7 @@ class ImageGenerator:
                 pass
         
         # Handle common HTTP errors
-        if hasattr(exception, 'status_code'):
+        if hasattr(exception, 'status_code') and exception.status_code is not None:
             status_code = exception.status_code
             if status_code == 401:
                 return "API Error: Invalid API key or authentication failed"
