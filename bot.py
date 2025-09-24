@@ -206,9 +206,9 @@ async def handle_generation_request(message):
         try:
             # Try to edit the response message if it exists, otherwise reply to original
             if 'response_message' in locals():
-                await response_message.edit(content="An error occurred while processing your request. Please try again.")
+                await response_message.edit(content=str(e))
             else:
-                await message.reply("An error occurred while processing your request. Please try again.")
+                await message.reply(str(e))
         except:
             pass
 
@@ -335,7 +335,10 @@ async def process_generation_request(response_message, text_content: str, images
                 # Only files, no content
                 await response_message.edit(content=None, attachments=files)
         else:
-            await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
+            # No response or files - this means both image and text generation failed
+            # But we should have gotten error messages from the API clients, so this shouldn't happen
+            # If it does happen, we just won't edit the message and it will stay as "Generating response..."
+            pass
         
         # Send ephemeral warning message if user just hit their limit (requirement #4)
         if send_limit_warning:
@@ -354,7 +357,8 @@ async def process_generation_request(response_message, text_content: str, images
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
-        await response_message.edit(content="An error occurred while generating. Please try again.")
+        # Pass the error message directly to the user
+        await response_message.edit(content=str(e))
 
 
 
@@ -453,7 +457,7 @@ async def usage_slash(interaction: discord.Interaction):
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
-        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+        await interaction.response.send_message(str(e))
 
 @bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')
@@ -492,7 +496,7 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
     except Exception as e:
         logger.error(f"Error in reset command: {e}")
         await interaction.response.send_message(
-            "An error occurred while resetting user usage. Please try again.",
+            str(e),
             ephemeral=True
         )
 

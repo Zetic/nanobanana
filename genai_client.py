@@ -35,7 +35,9 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text: {e}")
-            return None, None, None
+            # Return the API error message as text response
+            error_text = str(e)
+            return None, error_text, None
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
@@ -52,7 +54,9 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and image: {e}")
-            return None, None, None
+            # Return the API error message as text response
+            error_text = str(e)
+            return None, error_text, None
     
     async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -72,7 +76,9 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
-            return None, None, None
+            # Return the API error message as text response
+            error_text = str(e)
+            return None, error_text, None
     
     async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -109,7 +115,9 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from images only: {e}")
-            return None, None, None
+            # Return the API error message as text response
+            error_text = str(e)
+            return None, error_text, None
 
     async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata)."""
@@ -143,7 +151,9 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and multiple images: {e}")
-            return None, None, None
+            # Return the API error message as text response
+            error_text = str(e)
+            return None, error_text, None
 
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata)."""
@@ -168,7 +178,9 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating text-only response: {e}")
-            return None, None, None
+            # Return the API error message as text response
+            error_text = str(e)
+            return None, error_text, None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
         """Extract image from GenAI response."""
