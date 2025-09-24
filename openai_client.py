@@ -45,4 +45,34 @@ class OpenAIImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating meme with OpenAI: {e}")
+            # Note: OpenAI errors are handled differently - could extend this method 
+            # to return error message if needed, but currently not used by bot
             return None
+
+    def _extract_error_message(self, exception: Exception) -> str:
+        """Extract informative error message from OpenAI API exceptions."""
+        try:
+            # Check if it's an OpenAI API error
+            if hasattr(exception, 'message') and exception.message:
+                return f"API Error: {exception.message}"
+            
+            # For OpenAI errors, also check for response content
+            if hasattr(exception, 'response') and exception.response:
+                try:
+                    error_data = exception.response.json()
+                    if 'error' in error_data and 'message' in error_data['error']:
+                        return f"API Error: {error_data['error']['message']}"
+                except:
+                    pass
+            
+            # Check if it's a string representation that might be informative
+            error_str = str(exception)
+            if error_str and error_str.strip() and error_str != 'None':
+                return f"Error: {error_str}"
+                
+            # Fallback to generic message if no useful error info
+            return "An unexpected error occurred. Please try again with different input."
+            
+        except Exception:
+            # If anything goes wrong extracting the error message, use fallback
+            return "An unexpected error occurred. Please try again with different input."
