@@ -198,17 +198,38 @@ async def handle_generation_request(message):
                 logger.error(f"Error fetching original message: {e}")
                 # Continue processing even if we can't fetch the original message
         
-        # Process based on inputs
-        await process_generation_request(response_message, text_content, images, message.author)
+        # Process based on inputs with timeout failsafe
+        try:
+            # Set a timeout to prevent getting stuck on "Generating response..."
+            # Use a generous timeout of 5 minutes for AI generation
+            await asyncio.wait_for(
+                process_generation_request(response_message, text_content, images, message.author),
+                timeout=300.0  # 5 minutes
+            )
+        except asyncio.TimeoutError:
+            await response_message.edit(content="Request timed out - the AI service took too long to respond. Please try again with a simpler request.")
+        except Exception as generation_error:
+            # If there's an error in generation, extract API error if possible
+            error_message = str(generation_error)
+            if hasattr(generation_error, '__module__') and 'genai' in generation_error.__module__:
+                # This is likely a GenAI API error, extract meaningful message
+                from genai_client import ImageGenerator
+                generator = ImageGenerator()
+                error_message = generator._extract_api_error_message(generation_error)
+            else:
+                error_message = f"Generation Error: {error_message}"
+            
+            await response_message.edit(content=error_message)
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
         try:
             # Try to edit the response message if it exists, otherwise reply to original
+            error_message = f"Request Error: {str(e)}"
             if 'response_message' in locals():
-                await response_message.edit(content="An error occurred while processing your request. Please try again.")
+                await response_message.edit(content=error_message)
             else:
-                await message.reply("An error occurred while processing your request. Please try again.")
+                await message.reply(error_message)
         except:
             pass
 
@@ -335,7 +356,8 @@ async def process_generation_request(response_message, text_content: str, images
                 # Only files, no content
                 await response_message.edit(content=None, attachments=files)
         else:
-            await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
+            # No response from API - this should not happen with the new error handling
+            await response_message.edit(content="No response received from AI service.")
         
         # Send ephemeral warning message if user just hit their limit (requirement #4)
         if send_limit_warning:
@@ -354,7 +376,9 @@ async def process_generation_request(response_message, text_content: str, images
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
-        await response_message.edit(content="An error occurred while generating. Please try again.")
+        # Extract meaningful error message if possible
+        error_message = f"Processing Error: {str(e)}"
+        await response_message.edit(content=error_message)
 
 
 
@@ -453,7 +477,8 @@ async def usage_slash(interaction: discord.Interaction):
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
-        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+        error_message = f"Usage Statistics Error: {str(e)}"
+        await interaction.response.send_message(error_message)
 
 @bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')
@@ -491,8 +516,9 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
             
     except Exception as e:
         logger.error(f"Error in reset command: {e}")
+        error_message = f"Reset Command Error: {str(e)}"
         await interaction.response.send_message(
-            "An error occurred while resetting user usage. Please try again.",
+            error_message,
             ephemeral=True
         )
 

@@ -35,7 +35,8 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text: {e}")
-            return None, None, None
+            error_message = self._extract_api_error_message(e)
+            return None, error_message, None
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
@@ -52,7 +53,8 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and image: {e}")
-            return None, None, None
+            error_message = self._extract_api_error_message(e)
+            return None, error_message, None
     
     async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -72,7 +74,8 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
-            return None, None, None
+            error_message = self._extract_api_error_message(e)
+            return None, error_message, None
     
     async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
@@ -109,7 +112,8 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from images only: {e}")
-            return None, None, None
+            error_message = self._extract_api_error_message(e)
+            return None, error_message, None
 
     async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata)."""
@@ -143,7 +147,8 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating image from text and multiple images: {e}")
-            return None, None, None
+            error_message = self._extract_api_error_message(e)
+            return None, error_message, None
 
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata)."""
@@ -168,7 +173,8 @@ class ImageGenerator:
             
         except Exception as e:
             logger.error(f"Error generating text-only response: {e}")
-            return None, None, None
+            error_message = self._extract_api_error_message(e)
+            return None, error_message, None
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
         """Extract image from GenAI response."""
@@ -229,3 +235,69 @@ class ImageGenerator:
                 "total_token_count": 0,
                 "cached_content_token_count": 0,
             }
+
+    def _extract_api_error_message(self, exception) -> str:
+        """Extract meaningful error message from API exception."""
+        # Try to extract API-provided error messages
+        error_msg = str(exception)
+        
+        # Handle specific exception types and extract meaningful messages
+        if hasattr(exception, 'response') and exception.response is not None:
+            try:
+                if hasattr(exception.response, 'text'):
+                    response_text = exception.response.text
+                    # Try to parse JSON error response
+                    import json
+                    try:
+                        error_data = json.loads(response_text)
+                        if 'error' in error_data:
+                            error_info = error_data['error']
+                            if isinstance(error_info, dict) and 'message' in error_info:
+                                return f"API Error: {error_info['message']}"
+                            elif isinstance(error_info, str):
+                                return f"API Error: {error_info}"
+                    except (json.JSONDecodeError, KeyError):
+                        # If not JSON, return the raw response text if it looks like an error message
+                        if len(response_text) < 200 and ('error' in response_text.lower() or 'invalid' in response_text.lower()):
+                            return f"API Error: {response_text}"
+            except Exception:
+                pass
+        
+        # Handle common HTTP errors
+        if hasattr(exception, 'status_code'):
+            status_code = exception.status_code
+            if status_code == 401:
+                return "API Error: Invalid API key or authentication failed"
+            elif status_code == 403:
+                return "API Error: Access forbidden - check API permissions"
+            elif status_code == 404:
+                return "API Error: Model or endpoint not found"
+            elif status_code == 429:
+                return "API Error: Rate limit exceeded - please try again later"
+            elif status_code >= 500:
+                return "API Error: Server error - service temporarily unavailable"
+            else:
+                return f"API Error: HTTP {status_code} - {error_msg}"
+        
+        # Handle connection and network errors
+        if 'No address associated with hostname' in error_msg:
+            return "API Error: Unable to connect to AI service - network issue"
+        elif 'Connection' in error_msg and ('timeout' in error_msg.lower() or 'refused' in error_msg.lower()):
+            return "API Error: Connection failed - service may be temporarily unavailable"
+        elif 'timeout' in error_msg.lower():
+            return "API Error: Request timed out - please try again"
+        
+        # For other exceptions, try to extract meaningful parts
+        if len(error_msg) > 100:
+            # If the error is too long, try to extract the key part
+            lines = error_msg.split('\n')
+            for line in lines:
+                if any(keyword in line.lower() for keyword in ['error', 'invalid', 'failed', 'denied']):
+                    return f"API Error: {line.strip()}"
+            # If no clear error line, return first non-empty line
+            for line in lines:
+                if line.strip():
+                    return f"API Error: {line.strip()}"
+        
+        # Default fallback - return the original error but prefix it
+        return f"API Error: {error_msg}"
