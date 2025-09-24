@@ -335,7 +335,8 @@ async def process_generation_request(response_message, text_content: str, images
                 # Only files, no content
                 await response_message.edit(content=None, attachments=files)
         else:
-            await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
+            # No response generated - per requirements, remain silent instead of generic message
+            pass
         
         # Send ephemeral warning message if user just hit their limit (requirement #4)
         if send_limit_warning:
