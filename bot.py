@@ -5,6 +5,7 @@ import logging
 import asyncio
 import io
 import os
+import tempfile
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
@@ -13,6 +14,7 @@ from image_utils import download_image
 from genai_client import ImageGenerator
 from openai_client import OpenAIImageGenerator
 from usage_tracker import usage_tracker
+from log_manager import log_manager
 
 # Set up logging
 logging.basicConfig(
@@ -390,15 +392,23 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
-• `/usage` - Show token usage statistics
+• `/usage` - Show token usage statistics (elevated users only)
+• `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)"""
     
     await interaction.response.send_message(help_text)
 
-@bot.tree.command(name='usage', description='Show token usage statistics')
+@bot.tree.command(name='usage', description='Show token usage statistics (elevated users only)')
 async def usage_slash(interaction: discord.Interaction):
-    """Show token usage statistics (slash command)."""
+    """Show token usage statistics (slash command) - elevated users only."""
     try:
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command. Only elevated users can view usage statistics.",
+                ephemeral=True
+            )
+            return
         # Get usage statistics
         users_list = usage_tracker.get_usage_stats()
         total_stats = usage_tracker.get_total_stats()
@@ -440,20 +450,113 @@ async def usage_slash(interaction: discord.Interaction):
         if len(users_list) > 10:
             usage_text += f"... and {len(users_list) - 10} more users.\n"
         
-        # Handle long messages by splitting them into chunks
-        message_chunks = split_long_message(usage_text, max_length=1800)
+        # Generate more comprehensive data for the file (no Discord character limits)
+        if len(users_list) > 10:
+            usage_text += "\n**📋 Complete User List:**\n"
+            for i, (user_id, user_data) in enumerate(users_list, 1):
+                username = user_data.get('username', 'Unknown User')
+                output_tokens = user_data.get('total_output_tokens', 0)
+                input_tokens = user_data.get('total_prompt_tokens', 0)
+                total_tokens = user_data.get('total_tokens', 0)
+                images = user_data.get('images_generated', 0)
+                requests = user_data.get('requests_count', 0)
+                
+                usage_text += f"{i}. **{username}** (ID: {user_id})\n"
+                usage_text += f"   • Output Tokens: {output_tokens:,}\n"
+                usage_text += f"   • Input Tokens: {input_tokens:,}\n"
+                usage_text += f"   • Total Tokens: {total_tokens:,}\n"
+                usage_text += f"   • Images: {images} | Requests: {requests}\n\n"
         
-        # Send the first chunk as the response
-        first_chunk = message_chunks[0] if message_chunks else usage_text
-        await interaction.response.send_message(first_chunk)
+        # Add timestamp
+        usage_text += f"\n---\nGenerated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         
-        # Send any additional chunks as follow-up messages
-        for chunk in message_chunks[1:]:
-            await interaction.followup.send(chunk)
+        # Create a temporary file with the usage statistics
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as temp_file:
+            temp_file.write(usage_text)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Send the file
+            with open(temp_file_path, 'rb') as file:
+                discord_file = discord.File(file, filename=f'usage_stats_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
+                await interaction.response.send_message(
+                    "📊 **Usage Statistics Report**\nHere are the current token usage statistics:",
+                    file=discord_file,
+                    ephemeral=True
+                )
+        finally:
+            # Clean up the temporary file
+            try:
+                os.unlink(temp_file_path)
+            except Exception:
+                pass
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
         await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+
+@bot.tree.command(name='log', description='Get the most recent log file (elevated users only)')
+async def log_slash(interaction: discord.Interaction):
+    """Get the most recent log file (slash command) - elevated users only."""
+    try:
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command. Only elevated users can access log files.",
+                ephemeral=True
+            )
+            return
+        
+        # Get the most recent log file
+        log_file_path = log_manager.get_most_recent_log_file()
+        
+        if not log_file_path or not os.path.exists(log_file_path):
+            await interaction.response.send_message(
+                "📁 No log files found. The bot may not have generated any logs yet.",
+                ephemeral=True
+            )
+            return
+        
+        # Get file info
+        file_size = os.path.getsize(log_file_path)
+        file_name = os.path.basename(log_file_path)
+        
+        # Discord has a file size limit of 8MB for non-premium servers
+        if file_size > 8 * 1024 * 1024:  # 8MB
+            await interaction.response.send_message(
+                f"📁 **Log file too large**\n"
+                f"The log file `{file_name}` is {file_size / (1024*1024):.2f}MB, which exceeds Discord's file size limit. "
+                f"Please check the server's log directory directly.",
+                ephemeral=True
+            )
+            return
+        
+        try:
+            # Send the log file
+            with open(log_file_path, 'rb') as file:
+                discord_file = discord.File(file, filename=file_name)
+                await interaction.response.send_message(
+                    f"📋 **Most Recent Log File**\n"
+                    f"Filename: `{file_name}`\n"
+                    f"Size: {file_size / 1024:.2f}KB",
+                    file=discord_file,
+                    ephemeral=True
+                )
+                logger.info(f"Elevated user {interaction.user.id} downloaded log file {file_name}")
+        except Exception as file_error:
+            logger.error(f"Error reading log file {log_file_path}: {file_error}")
+            await interaction.response.send_message(
+                "❌ Error reading the log file. Please try again later.",
+                ephemeral=True
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in log command: {e}")
+        await interaction.response.send_message(
+            "An error occurred while retrieving the log file. Please try again.",
+            ephemeral=True
+        )
 
 @bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')

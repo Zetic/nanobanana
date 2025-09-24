@@ -34,5 +34,9 @@ if _elevated_users_str.strip():
         print("Warning: Invalid ELEVATED_USERS format in environment variable. Expected comma-separated integers.")
         ELEVATED_USERS = []
 
+# Logs configuration
+LOGS_DIR = 'logs'
+
 # Ensure directories exist
 os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)

@@ -94,8 +94,12 @@ When you mention the bot in a reply to another message, it will automatically in
 
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
-- `/usage` - Show token usage statistics
+- `/usage` - Show token usage statistics (elevated users only) - returns file
+- `/log` - Get the most recent log file (elevated users only)
+- `/reset` - Reset cycle image usage for a user (elevated users only)
 - `/meme` - Generate a nonsensical meme using OpenAI
+
+**Note:** Elevated users are configured via the `ELEVATED_USERS` environment variable (comma-separated Discord user IDs).
 
 ### Usage Tracking
 
@@ -113,7 +117,16 @@ The bot automatically tracks token usage for each Discord user:
 - Afternoon cycle: 12:00 - 23:59
 - Elevated users have unlimited image generation
 
-Use `/usage` to view statistics sorted by output token usage. Data is stored locally in JSON format with thread-safe operations for concurrent access.
+Use `/usage` to view statistics sorted by output token usage (elevated users only). Data is stored locally in JSON format with thread-safe operations for concurrent access.
+
+### Logging
+
+The bot maintains daily log files in the `logs/` directory:
+- **Daily rotation**: New log file created each day (format: `bot-YYYY-MM-DD.log`)
+- **Persistent logging**: Bot continues writing to the same day's log file if restarted
+- **Log retrieval**: Elevated users can download the most recent log file using `/log`
+
+All bot activities, errors, and user interactions are logged for monitoring and debugging purposes.
 
 ## 🛠️ Configuration
 
@@ -124,6 +137,7 @@ Use `/usage` to view statistics sorted by output token usage. Data is stored loc
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
 | `OPENAI_API_KEY` | Your OpenAI API key (for meme generation) | Yes |
+| `ELEVATED_USERS` | Comma-separated Discord user IDs with elevated permissions | No |
 
 ### Bot Configuration
 
