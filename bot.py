@@ -335,6 +335,8 @@ async def process_generation_request(response_message, text_content: str, images
                 # Only files, no content
                 await response_message.edit(content=None, attachments=files)
         else:
+            # No response or files generated - this is rare and usually indicates 
+            # the API returned empty results rather than an error
             await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
         
         # Send ephemeral warning message if user just hit their limit (requirement #4)
