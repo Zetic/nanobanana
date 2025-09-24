@@ -94,8 +94,12 @@ When you mention the bot in a reply to another message, it will automatically in
 
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
-- `/usage` - Show token usage statistics
 - `/meme` - Generate a nonsensical meme using OpenAI
+
+**Elevated User Commands:**
+- `/usage` - Export token usage statistics as a file (elevated users only)
+- `/log` - Export bot logs as a file (elevated users only)  
+- `/reset` - Reset cycle image usage for a user (elevated users only)
 
 ### Usage Tracking
 

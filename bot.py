@@ -21,6 +21,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Set up in-memory log handler for /log command
+from collections import deque
+import threading
+
+class InMemoryLogHandler(logging.Handler):
+    """Log handler that stores log records in memory for the /log command."""
+    
+    def __init__(self, max_records=5000):
+        super().__init__()
+        self.max_records = max_records
+        self.records = deque(maxlen=max_records)
+        self.lock = threading.Lock()
+    
+    def emit(self, record):
+        with self.lock:
+            self.records.append(self.format(record))
+    
+    def get_recent_logs(self, num_lines=5000):
+        with self.lock:
+            # Return the most recent records, up to num_lines
+            return list(self.records)[-num_lines:]
+
+# Create and add in-memory handler
+memory_handler = InMemoryLogHandler()
+memory_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(memory_handler)
+
 # All UI classes removed - bot now returns natural API responses directly
 
 # Bot setup
@@ -395,23 +422,31 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
     
     await interaction.response.send_message(help_text)
 
-@bot.tree.command(name='usage', description='Show token usage statistics')
+@bot.tree.command(name='usage', description='Show token usage statistics (elevated users only)')
 async def usage_slash(interaction: discord.Interaction):
-    """Show token usage statistics (slash command)."""
+    """Show token usage statistics (elevated users only)."""
     try:
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command. Only elevated users can view usage statistics.",
+                ephemeral=True
+            )
+            return
+        
         # Get usage statistics
         users_list = usage_tracker.get_usage_stats()
         total_stats = usage_tracker.get_total_stats()
         
         if not users_list:
-            await interaction.response.send_message("No usage data available yet. Start using the bot to generate some statistics!")
+            await interaction.response.send_message("No usage data available yet. Start using the bot to generate some statistics!", ephemeral=True)
             return
         
         # Build the response message
-        usage_text = "**🍌 Token Usage Statistics**\n\n"
+        usage_text = "🍌 Token Usage Statistics\n\n"
         
         # Add overall stats
-        usage_text += f"**📊 Overall Statistics:**\n"
+        usage_text += "📊 Overall Statistics:\n"
         usage_text += f"• Total Users: {total_stats['total_users']}\n"
         usage_text += f"• Total Requests: {total_stats['total_requests']}\n"
         usage_text += f"• Total Input Tokens: {total_stats['total_prompt_tokens']:,}\n"
@@ -419,11 +454,10 @@ async def usage_slash(interaction: discord.Interaction):
         usage_text += f"• Total Tokens: {total_stats['total_tokens']:,}\n"
         usage_text += f"• Images Generated: {total_stats['total_images_generated']}\n\n"
         
-        # Add top users (limit to top 10 to avoid message length issues)
-        usage_text += "**👑 Top Users by Output Tokens:**\n"
+        # Add all users (no limit for file output)
+        usage_text += "👑 Users by Output Tokens:\n"
         
-        top_users = users_list[:10]  # Limit to top 10
-        for i, (user_id, user_data) in enumerate(top_users, 1):
+        for i, (user_id, user_data) in enumerate(users_list, 1):
             username = user_data.get('username', 'Unknown User')
             output_tokens = user_data.get('total_output_tokens', 0)
             input_tokens = user_data.get('total_prompt_tokens', 0)
@@ -431,29 +465,31 @@ async def usage_slash(interaction: discord.Interaction):
             images = user_data.get('images_generated', 0)
             requests = user_data.get('requests_count', 0)
             
-            usage_text += f"{i}. **{username}**\n"
+            usage_text += f"{i}. {username} (ID: {user_id})\n"
             usage_text += f"   • Output Tokens: {output_tokens:,}\n"
             usage_text += f"   • Input Tokens: {input_tokens:,}\n"
             usage_text += f"   • Total Tokens: {total_tokens:,}\n"
             usage_text += f"   • Images: {images} | Requests: {requests}\n\n"
         
-        if len(users_list) > 10:
-            usage_text += f"... and {len(users_list) - 10} more users.\n"
+        # Create file buffer with usage statistics
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"usage_statistics_{timestamp}.txt"
         
-        # Handle long messages by splitting them into chunks
-        message_chunks = split_long_message(usage_text, max_length=1800)
+        usage_buffer = io.BytesIO(usage_text.encode('utf-8'))
+        file = discord.File(usage_buffer, filename=filename)
         
-        # Send the first chunk as the response
-        first_chunk = message_chunks[0] if message_chunks else usage_text
-        await interaction.response.send_message(first_chunk)
+        # Send the file
+        await interaction.response.send_message(
+            f"📊 Usage statistics exported to file (requested by {interaction.user.display_name})", 
+            file=file,
+            ephemeral=True
+        )
         
-        # Send any additional chunks as follow-up messages
-        for chunk in message_chunks[1:]:
-            await interaction.followup.send(chunk)
+        logger.info(f"Elevated user {interaction.user.id} requested usage statistics")
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
-        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.", ephemeral=True)
 
 @bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')
@@ -495,6 +531,48 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
             "An error occurred while resetting user usage. Please try again.",
             ephemeral=True
         )
+
+@bot.tree.command(name='log', description='Export bot logs (elevated users only)')
+async def log_slash(interaction: discord.Interaction):
+    """Export the bot's recent log entries (elevated users only)."""
+    try:
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command. Only elevated users can export logs.",
+                ephemeral=True
+            )
+            return
+        
+        # Get recent logs (last 5000 lines)
+        log_lines = memory_handler.get_recent_logs(5000)
+        
+        if not log_lines:
+            await interaction.response.send_message("No log data available yet.", ephemeral=True)
+            return
+        
+        # Create log content
+        log_content = "\n".join(log_lines)
+        
+        # Create file buffer with log data
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"bot_logs_{timestamp}.log"
+        
+        log_buffer = io.BytesIO(log_content.encode('utf-8'))
+        file = discord.File(log_buffer, filename=filename)
+        
+        # Send the file
+        await interaction.response.send_message(
+            f"📋 Bot logs exported to file - {len(log_lines)} lines (requested by {interaction.user.display_name})", 
+            file=file,
+            ephemeral=True
+        )
+        
+        logger.info(f"Elevated user {interaction.user.id} requested bot logs ({len(log_lines)} lines)")
+        
+    except Exception as e:
+        logger.error(f"Error exporting logs: {e}")
+        await interaction.response.send_message("An error occurred while exporting logs. Please try again.", ephemeral=True)
 
 
 
