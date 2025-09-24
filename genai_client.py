@@ -19,8 +19,43 @@ class ImageGenerator:
         self.model = "gemini-2.5-flash-image-preview"
         self.text_only_model = "gemini-2.5-flash"
     
-    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate an image from text prompt only. Returns (image, text_response, usage_metadata)."""
+    def _extract_error_message(self, exception: Exception) -> Optional[str]:
+        """Extract user-friendly error message from API exception."""
+        error_str = str(exception)
+        
+        # Check for common API error patterns and extract meaningful messages
+        if hasattr(exception, 'message'):
+            return exception.message
+        elif hasattr(exception, 'details'):
+            return exception.details
+        elif 'quota exceeded' in error_str.lower():
+            return "API quota exceeded. Please try again later."
+        elif 'invalid request' in error_str.lower():
+            return "Invalid request format. Please check your input."
+        elif 'model not found' in error_str.lower():
+            return "The requested model is not available."
+        elif 'authentication' in error_str.lower() or 'unauthorized' in error_str.lower():
+            return "Authentication failed. Please check API credentials."
+        elif 'rate limit' in error_str.lower():
+            return "Rate limit exceeded. Please wait before trying again."
+        elif 'timeout' in error_str.lower():
+            return "Request timed out. Please try again."
+        elif 'content policy' in error_str.lower() or 'safety' in error_str.lower():
+            return "Content blocked by safety policies. Please try a different prompt."
+        
+        # If no specific pattern matches, check if the error message looks user-friendly
+        # Filter out obviously technical messages while allowing reasonable error messages
+        if (len(error_str) < 200 and 
+            error_str and  # Not empty
+            not (len(error_str.split()) == 1 and any(char.isdigit() for char in error_str)) and  # Not single word with numbers
+            not any(term in error_str.lower() for term in ['stacktrace', 'traceback', 'at line', 'exception in thread'])):  # Not stack trace
+            return error_str
+        
+        # If it's just technical details, return None (bot should be silent)
+        return None
+    
+    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Generate an image from text prompt only. Returns (image, text_response, usage_metadata, error_message)."""
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -31,14 +66,15 @@ class ImageGenerator:
             text = self._extract_text_from_response(response)
             usage = self._extract_usage_from_response(response)
             
-            return image, text, usage
+            return image, text, usage, None
             
         except Exception as e:
             logger.error(f"Error generating image from text: {e}")
-            return None, None, None
+            error_message = self._extract_error_message(e)
+            return None, None, None, error_message
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata, error_message)."""
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -48,14 +84,15 @@ class ImageGenerator:
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
             usage = self._extract_usage_from_response(response)
-            return image, text, usage
+            return image, text, usage, None
             
         except Exception as e:
             logger.error(f"Error generating image from text and image: {e}")
-            return None, None, None
+            error_message = self._extract_error_message(e)
+            return None, None, None, error_message
     
-    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
+    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Generate an image from input image only with generic transformation prompt. Returns (image, text_response, usage_metadata, error_message)."""
         try:
             # Use a generic prompt that lets the AI decide how to transform the image
             generic_prompt = "Transform and enhance this image creatively while maintaining its core subject and essence."
@@ -68,14 +105,15 @@ class ImageGenerator:
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
             usage = self._extract_usage_from_response(response)
-            return image, text, usage
+            return image, text, usage, None
             
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
-            return None, None, None
+            error_message = self._extract_error_message(e)
+            return None, None, None, error_message
     
-    async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata)."""
+    async def generate_image_from_images_only(self, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Generate an image from multiple input images only with generic transformation prompt. Returns (image, text_response, usage_metadata, error_message)."""
         try:
             # Use a generic prompt for multiple images
             generic_prompt = "Creatively combine and transform these images while maintaining their core subjects and essence."
@@ -105,14 +143,15 @@ class ImageGenerator:
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
             usage = self._extract_usage_from_response(response)
-            return image, text, usage
+            return image, text, usage, None
             
         except Exception as e:
             logger.error(f"Error generating image from images only: {e}")
-            return None, None, None
+            error_message = self._extract_error_message(e)
+            return None, None, None, error_message
 
-    async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata)."""
+    async def generate_image_from_text_and_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Generate an image from text prompt and multiple input images. Returns (image, text_response, usage_metadata, error_message)."""
         try:
             # Create contents list starting with the prompt
             contents = [prompt]
@@ -139,14 +178,15 @@ class ImageGenerator:
             image = self._extract_image_from_response(response)
             text = self._extract_text_from_response(response)
             usage = self._extract_usage_from_response(response)
-            return image, text, usage
+            return image, text, usage, None
             
         except Exception as e:
             logger.error(f"Error generating image from text and multiple images: {e}")
-            return None, None, None
+            error_message = self._extract_error_message(e)
+            return None, None, None, error_message
 
-    async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
-        """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata)."""
+    async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Generate text-only response for rate-limited users. Returns (None, text_response, usage_metadata, error_message)."""
         try:
             # Create appropriate prompt based on input
             if input_images:
@@ -164,11 +204,12 @@ class ImageGenerator:
             usage = self._extract_usage_from_response(response)
             
             # Always return None for image since this is text-only
-            return None, text, usage
+            return None, text, usage, None
             
         except Exception as e:
             logger.error(f"Error generating text-only response: {e}")
-            return None, None, None
+            error_message = self._extract_error_message(e)
+            return None, None, None, error_message
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
         """Extract image from GenAI response."""

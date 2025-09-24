@@ -203,14 +203,7 @@ async def handle_generation_request(message):
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
-        try:
-            # Try to edit the response message if it exists, otherwise reply to original
-            if 'response_message' in locals():
-                await response_message.edit(content="An error occurred while processing your request. Please try again.")
-            else:
-                await message.reply("An error occurred while processing your request. Please try again.")
-        except:
-            pass
+        # Don't send generic error messages per requirements - remain silent
 
 async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
@@ -223,6 +216,7 @@ async def process_generation_request(response_message, text_content: str, images
         generated_image = None
         genai_text_response = None
         usage_metadata = None
+        error_message = None
         
         if not can_generate_images:
             # User is rate limited for images - use text-only fallback
@@ -232,7 +226,7 @@ async def process_generation_request(response_message, text_content: str, images
             if text_content.strip() or images:
                 # Use text content if available, otherwise provide generic prompt for image analysis
                 prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
+                generated_image, genai_text_response, usage_metadata, error_message = await get_image_generator().generate_text_only_response(prompt, images)
                 
                 # Do NOT add rate limit notice to the response (requirement #4)
             else:
@@ -244,26 +238,32 @@ async def process_generation_request(response_message, text_content: str, images
             if images and text_content.strip():
                 # Text + Image(s) case
                 if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
+                    generated_image, genai_text_response, usage_metadata, error_message = await get_image_generator().generate_image_from_text_and_image(
                         text_content, images[0]
                     )
                 else:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
+                    generated_image, genai_text_response, usage_metadata, error_message = await get_image_generator().generate_image_from_text_and_images(
                         text_content, images
                     )
             elif images:
                 # Image(s) only case - no text provided
                 if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
+                    generated_image, genai_text_response, usage_metadata, error_message = await get_image_generator().generate_image_from_image_only(images[0])
                 else:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
+                    generated_image, genai_text_response, usage_metadata, error_message = await get_image_generator().generate_image_from_images_only(images)
             elif text_content.strip():
                 # Text only case
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+                generated_image, genai_text_response, usage_metadata, error_message = await get_image_generator().generate_image_from_text(text_content)
             else:
                 # No content provided
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
                 return
+        
+        # Handle API errors
+        if error_message:
+            # If we have an API error message, send it instead of generic error
+            await response_message.edit(content=error_message)
+            return
         
         # Track usage if we have metadata and a user
         send_limit_warning = False
@@ -354,7 +354,7 @@ async def process_generation_request(response_message, text_content: str, images
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
-        await response_message.edit(content="An error occurred while generating. Please try again.")
+        # Don't send generic error messages per requirements - remain silent
 
 
 
@@ -453,7 +453,11 @@ async def usage_slash(interaction: discord.Interaction):
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
-        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+        # Don't send generic error message per requirements
+        try:
+            await interaction.response.send_message("Unable to retrieve usage statistics.", ephemeral=True)
+        except:
+            pass
 
 @bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')
@@ -491,10 +495,14 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
             
     except Exception as e:
         logger.error(f"Error in reset command: {e}")
-        await interaction.response.send_message(
-            "An error occurred while resetting user usage. Please try again.",
-            ephemeral=True
-        )
+        # Don't send generic error message per requirements
+        try:
+            await interaction.response.send_message(
+                "Unable to reset user usage.",
+                ephemeral=True
+            )
+        except:
+            pass
 
 
 
