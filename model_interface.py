@@ -9,6 +9,7 @@ import base64
 from abc import ABC, abstractmethod
 from PIL import Image
 from google import genai
+from google.genai import types
 from openai import OpenAI
 from typing import Optional, List, Tuple, Dict, Any
 import config
@@ -60,8 +61,17 @@ class GeminiModelGenerator(BaseModelGenerator):
                         for part in candidate.content.parts:
                             if hasattr(part, 'inline_data') and part.inline_data:
                                 if part.inline_data.mime_type.startswith('image/'):
-                                    image_data = base64.b64decode(part.inline_data.data)
-                                    return Image.open(io.BytesIO(image_data))
+                                    # Try to use the data directly first (it should be bytes)
+                                    try:
+                                        return Image.open(io.BytesIO(part.inline_data.data))
+                                    except Exception:
+                                        # Fallback: try base64 decoding if direct bytes don't work
+                                        try:
+                                            image_data = base64.b64decode(part.inline_data.data)
+                                            return Image.open(io.BytesIO(image_data))
+                                        except Exception as e:
+                                            logger.error(f"Failed to decode image data: {e}")
+                                            continue
             return None
         except Exception as e:
             logger.error(f"Error extracting image from response: {e}")
@@ -130,9 +140,20 @@ class GeminiModelGenerator(BaseModelGenerator):
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image."""
         try:
+            # Convert PIL Image to bytes for API
+            img_buffer = io.BytesIO()
+            input_image.save(img_buffer, format='PNG')
+            img_bytes = img_buffer.getvalue()
+            
+            # Create Part from bytes
+            image_part = types.Part.from_bytes(
+                data=img_bytes,
+                mime_type='image/png'
+            )
+            
             response = self.client.models.generate_content(
                 model=self.model,
-                contents=[prompt, input_image],
+                contents=[prompt, image_part],
             )
             
             image = self._extract_image_from_response(response)
@@ -157,15 +178,25 @@ class GeminiModelGenerator(BaseModelGenerator):
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users."""
         try:
-            # Create appropriate prompt based on input
+            # For text-only responses with images, include the images so the model can analyze them
             if input_images:
-                full_prompt = f"{prompt}\n\n[Note: Image(s) were provided but cannot be processed due to daily image generation limit. Responding with text only.]"
+                contents = [prompt]
+                for image in input_images:
+                    img_buffer = io.BytesIO()
+                    image.save(img_buffer, format='PNG')
+                    img_bytes = img_buffer.getvalue()
+                    
+                    image_part = types.Part.from_bytes(
+                        data=img_bytes,
+                        mime_type='image/png'
+                    )
+                    contents.append(image_part)
             else:
-                full_prompt = prompt
+                contents = [prompt]
             
             response = self.client.models.generate_content(
                 model=self.text_only_model,
-                contents=[full_prompt],
+                contents=contents,
             )
             
             text = self._extract_text_from_response(response)
@@ -317,15 +348,26 @@ class ChatModelGenerator(BaseModelGenerator):
     async def _generate_text_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text response using Gemini."""
         try:
-            # Create appropriate prompt based on input
+            # For text-only model, we need to process images differently
             if input_images:
-                full_prompt = f"{prompt}\n\n[Note: Image(s) were provided but this is a text-only chat model.]"
+                # Convert images to Parts for the text-only model to analyze
+                contents = [prompt]
+                for image in input_images:
+                    img_buffer = io.BytesIO()
+                    image.save(img_buffer, format='PNG')
+                    img_bytes = img_buffer.getvalue()
+                    
+                    image_part = types.Part.from_bytes(
+                        data=img_bytes,
+                        mime_type='image/png'
+                    )
+                    contents.append(image_part)
             else:
-                full_prompt = prompt
+                contents = [prompt]
             
             response = self.client.models.generate_content(
                 model=self.text_only_model,
-                contents=[full_prompt],
+                contents=contents,
             )
             
             text = self._extract_text_from_response(response)

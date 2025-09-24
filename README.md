@@ -155,9 +155,10 @@ The bot can be configured in `config.py`:
 nanobanana/
 ├── bot.py              # Main Discord bot implementation
 ├── config.py           # Configuration management
-├── genai_client.py     # Google GenAI integration
-├── openai_client.py    # OpenAI integration for memes
+├── model_interface.py  # Unified AI model interface (Gemini, GPT, Chat)
 ├── image_utils.py      # Image processing utilities
+├── usage_tracker.py    # User usage tracking system
+├── log_manager.py      # Logging system management
 ├── main.py             # Entry point
 ├── requirements.txt    # Python dependencies
 ├── .env.example        # Environment template
