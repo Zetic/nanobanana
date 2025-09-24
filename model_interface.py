@@ -21,17 +21,17 @@ class BaseModelGenerator(ABC):
     """Abstract base class for AI model generators."""
     
     @abstractmethod
-    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt. Returns (image, text_response, usage_metadata)."""
         pass
     
     @abstractmethod  
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
         pass
     
     @abstractmethod
-    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only. Returns (image, text_response, usage_metadata)."""
         pass
         
@@ -119,7 +119,7 @@ class GeminiModelGenerator(BaseModelGenerator):
                 "cached_content_token_count": 0,
             }
     
-    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
         try:
             response = self.client.models.generate_content(
@@ -137,7 +137,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image from text: {e}")
             return None, None, None
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image."""
         try:
             # Convert PIL Image to bytes for API
@@ -166,11 +166,11 @@ class GeminiModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image from text and image: {e}")
             return None, None, None
     
-    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only with generic transformation prompt."""
         try:
             generic_prompt = "Transform this image in an interesting and creative way"
-            return await self.generate_image_from_text_and_image(generic_prompt, input_image)
+            return await self.generate_image_from_text_and_image(generic_prompt, input_image, streaming_callback)
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
             return None, None, None
@@ -219,7 +219,7 @@ class GPTModelGenerator(BaseModelGenerator):
         self.client = OpenAI(api_key=config.OPENAI_API_KEY)
         self.model = "gpt-image-1"
     
-    async def _generate_image_only(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def _generate_image_only(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image from text prompt using OpenAI Image API with streaming."""
         try:
             # Use streaming generation with partial images
@@ -239,6 +239,13 @@ class GPTModelGenerator(BaseModelGenerator):
                     partial_count += 1
                     # Log partial image received (could save them if needed)
                     logger.info(f"Received partial image {event.partial_image_index + 1}/3")
+                    
+                    # Update Discord message if callback provided
+                    if streaming_callback:
+                        try:
+                            await streaming_callback(f"Generating image... ({partial_count}/3)")
+                        except Exception as callback_error:
+                            logger.warning(f"Streaming callback failed: {callback_error}")
                     
                     # Could save partial images like in the example:
                     # image_base64 = event.b64_json
@@ -280,24 +287,23 @@ class GPTModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image with gpt-image-1: {e}")
             return None, None, None
     
-    async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image]) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image], streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image using input images for editing/reference with streaming."""
         try:
-            # Convert PIL images to binary format for the API
-            # According to the example, the API expects file-like objects
-            image_files = []
-            for i, img in enumerate(input_images):
-                img_buffer = io.BytesIO()
-                img.save(img_buffer, format='PNG')
-                img_buffer.seek(0)
-                # The API expects file-like objects that can be read
-                image_files.append(img_buffer)
+            # For image editing, we'll use the first image as primary
+            # OpenAI image edit API takes a single image, not a list
+            primary_image = input_images[0]
+            
+            # Convert PIL image to binary format for the API
+            img_buffer = io.BytesIO()
+            primary_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
             
             # Try streaming first - images.edit API also supports streaming
             try:
                 stream = self.client.images.edit(
                     model=self.model,
-                    image=image_files,  # List of BytesIO objects (file-like)
+                    image=img_buffer,  # Single BytesIO object (file-like)
                     prompt=prompt,
                     quality="medium",
                     stream=True,
@@ -312,6 +318,14 @@ class GPTModelGenerator(BaseModelGenerator):
                         partial_count += 1
                         # Log partial image received for image editing
                         logger.info(f"Received partial edited image {event.partial_image_index + 1}/3")
+                        
+                        # Update Discord message if callback provided
+                        if streaming_callback:
+                            try:
+                                await streaming_callback(f"Generating image... ({partial_count}/3)")
+                            except Exception as callback_error:
+                                logger.warning(f"Streaming callback failed: {callback_error}")
+                        
                     elif event.type == "image_generation.done":
                         # Final edited image
                         image_base64 = event.b64_json
@@ -332,17 +346,14 @@ class GPTModelGenerator(BaseModelGenerator):
                 logger.info(f"Streaming failed for image editing, falling back to non-streaming: {streaming_error}")
             
             # Fallback to non-streaming if streaming failed
-            # Need to recreate image files since they may have been consumed
-            image_files = []
-            for i, img in enumerate(input_images):
-                img_buffer = io.BytesIO()
-                img.save(img_buffer, format='PNG')
-                img_buffer.seek(0)
-                image_files.append(img_buffer)
+            # Need to recreate image since it may have been consumed
+            img_buffer = io.BytesIO()
+            primary_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
             
             response = self.client.images.edit(
                 model=self.model,
-                image=image_files,  # List of BytesIO objects (file-like)
+                image=img_buffer,  # Single BytesIO object (file-like)
                 prompt=prompt,
                 quality="medium"
             )
@@ -369,19 +380,19 @@ class GPTModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image with input images: {e}")
             return None, None, None
     
-    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
-        return await self._generate_image_only(prompt)
+        return await self._generate_image_only(prompt, streaming_callback)
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image."""
-        return await self._generate_image_with_input_images(prompt, [input_image])
+        return await self._generate_image_with_input_images(prompt, [input_image], streaming_callback)
     
-    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only."""
         # Use a generic creative prompt for image-only generation
         generic_prompt = "Transform this image in a creative and interesting way"
-        return await self._generate_image_with_input_images(generic_prompt, [input_image])
+        return await self._generate_image_with_input_images(generic_prompt, [input_image], streaming_callback)
     
     async def generate_text_only_response(self, prompt: str, input_images: List[Image.Image] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response. GPT Image API doesn't support text-only, so return a simple response."""
@@ -490,15 +501,15 @@ class ChatModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating text response: {e}")
             return None, None, None
     
-    async def generate_image_from_text(self, prompt: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         return await self._generate_text_response(prompt)
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         return await self._generate_text_response(prompt, [input_image])
     
-    async def generate_image_from_image_only(self, input_image: Image.Image) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         generic_prompt = "Please provide a text description or analysis of the provided content."
         return await self._generate_text_response(generic_prompt, [input_image])

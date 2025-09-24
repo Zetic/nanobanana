@@ -226,24 +226,36 @@ async def process_generation_request(response_message, text_content: str, images
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
                 return
         else:
+            # Create streaming callback for image-generating models that support it (gpt)
+            async def streaming_callback(message_text):
+                """Update Discord message with streaming progress."""
+                try:
+                    await response_message.edit(content=message_text)
+                except Exception as e:
+                    logger.warning(f"Failed to update streaming message: {e}")
+            
             # User can generate images or is using chat model
             if images and text_content.strip():
                 # Text + Image(s) case
                 if len(images) == 1:
                     generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0]
+                        text_content, images[0], streaming_callback if user_model == "gpt" else None
                     )
                 else:
                     # For multiple images, use the first one (most generators don't support multiple)
                     generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0]
+                        text_content, images[0], streaming_callback if user_model == "gpt" else None
                     )
             elif images:
                 # Image(s) only case - no text provided
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(images[0])
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
+                    images[0], streaming_callback if user_model == "gpt" else None
+                )
             elif text_content.strip():
                 # Text only case
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(text_content)
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
+                    text_content, streaming_callback if user_model == "gpt" else None
+                )
             else:
                 # No content provided
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
