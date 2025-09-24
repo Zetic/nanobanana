@@ -229,6 +229,7 @@ class GPTModelGenerator(BaseModelGenerator):
                 quality="medium",
                 stream=True,
                 partial_images=3,
+                response_format="b64_json"  # Ensure we get base64 encoded responses
             )
             
             generated_image = None
@@ -240,14 +241,22 @@ class GPTModelGenerator(BaseModelGenerator):
                     # Log partial image received (could save them if needed)
                     logger.info(f"Received partial image {event.partial_image_index + 1}/3")
                     
-                    # Update Discord message if callback provided
+                    # Update Discord message with partial image if callback provided
                     if streaming_callback:
                         try:
-                            await streaming_callback(f"Generating image... ({partial_count}/3)")
+                            # Convert partial image to PIL Image and send to callback
+                            if hasattr(event, 'b64_json') and event.b64_json:
+                                image_bytes = base64.b64decode(event.b64_json)
+                                partial_image = Image.open(io.BytesIO(image_bytes))
+                                # Call callback with partial image instead of just text
+                                await streaming_callback(f"Generating image... ({partial_count}/3)", partial_image)
+                            else:
+                                # Fallback to text if no image data
+                                await streaming_callback(f"Generating image... ({partial_count}/3)")
                         except Exception as callback_error:
                             logger.warning(f"Streaming callback failed: {callback_error}")
                     
-                    # Could save partial images like in the example:
+                    # Could save partial images for debugging:
                     # image_base64 = event.b64_json
                     # image_bytes = base64.b64decode(image_base64)
                     # with open(f"partial_{event.partial_image_index}.png", "wb") as f:
@@ -264,7 +273,8 @@ class GPTModelGenerator(BaseModelGenerator):
                 response = self.client.images.generate(
                     model=self.model,
                     prompt=prompt,
-                    quality="medium"
+                    quality="medium",
+                    response_format="b64_json"
                 )
                 if response.data and len(response.data) > 0:
                     image_base64 = response.data[0].b64_json
@@ -289,28 +299,37 @@ class GPTModelGenerator(BaseModelGenerator):
     
     async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image], streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image using input images for editing/reference with streaming."""
+        temp_filename = None
         try:
             # For image editing, we'll use the first image as primary
             # OpenAI image edit API takes a single image, not a list
             primary_image = input_images[0]
             
             # Convert PIL image to binary format for the API
-            img_buffer = io.BytesIO()
-            primary_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
+            # Some versions of OpenAI API work better with actual file handles
+            import tempfile
+            import os
             
-            # Try streaming first - images.edit API also supports streaming
+            # Save to temporary file first (some APIs prefer this)
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+                primary_image.save(temp_file.name, format='PNG')
+                temp_filename = temp_file.name
+            
+            generated_image = None
+            
+            # Try streaming first - images.edit API also supports streaming  
             try:
-                stream = self.client.images.edit(
-                    model=self.model,
-                    image=img_buffer,  # Single BytesIO object (file-like)
-                    prompt=prompt,
-                    quality="medium",
-                    stream=True,
-                    partial_images=3,
-                )
+                with open(temp_filename, 'rb') as img_file:
+                    stream = self.client.images.edit(
+                        model=self.model,
+                        image=img_file,  # Use file handle directly
+                        prompt=prompt,
+                        quality="medium",
+                        stream=True,
+                        partial_images=3,
+                        response_format="b64_json"  # Ensure we get base64 encoded responses
+                    )
                 
-                generated_image = None
                 partial_count = 0
                 
                 for event in stream:
@@ -319,10 +338,18 @@ class GPTModelGenerator(BaseModelGenerator):
                         # Log partial image received for image editing
                         logger.info(f"Received partial edited image {event.partial_image_index + 1}/3")
                         
-                        # Update Discord message if callback provided
+                        # Update Discord message with partial image if callback provided
                         if streaming_callback:
                             try:
-                                await streaming_callback(f"Generating image... ({partial_count}/3)")
+                                # Convert partial image to PIL Image and send to callback
+                                if hasattr(event, 'b64_json') and event.b64_json:
+                                    image_bytes = base64.b64decode(event.b64_json)
+                                    partial_image = Image.open(io.BytesIO(image_bytes))
+                                    # Call callback with partial image instead of just text
+                                    await streaming_callback(f"Editing image... ({partial_count}/3)", partial_image)
+                                else:
+                                    # Fallback to text if no image data
+                                    await streaming_callback(f"Editing image... ({partial_count}/3)")
                             except Exception as callback_error:
                                 logger.warning(f"Streaming callback failed: {callback_error}")
                         
@@ -341,24 +368,20 @@ class GPTModelGenerator(BaseModelGenerator):
                         "total_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,
                     }
                     return generated_image, text_response, usage_metadata
-            
+                
             except Exception as streaming_error:
                 logger.info(f"Streaming failed for image editing, falling back to non-streaming: {streaming_error}")
             
             # Fallback to non-streaming if streaming failed
-            # Need to recreate image since it may have been consumed
-            img_buffer = io.BytesIO()
-            primary_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
+            with open(temp_filename, 'rb') as img_file:
+                response = self.client.images.edit(
+                    model=self.model,
+                    image=img_file,  # Use file handle directly
+                    prompt=prompt,
+                    quality="medium",
+                    response_format="b64_json"  # Ensure we get base64 encoded responses
+                )
             
-            response = self.client.images.edit(
-                model=self.model,
-                image=img_buffer,  # Single BytesIO object (file-like)
-                prompt=prompt,
-                quality="medium"
-            )
-            
-            generated_image = None
             if response.data and len(response.data) > 0:
                 image_base64 = response.data[0].b64_json
                 image_bytes = base64.b64decode(image_base64)
@@ -379,6 +402,13 @@ class GPTModelGenerator(BaseModelGenerator):
         except Exception as e:
             logger.error(f"Error generating image with input images: {e}")
             return None, None, None
+        finally:
+            # Clean up temporary file if it exists
+            try:
+                if temp_filename and os.path.exists(temp_filename):
+                    os.unlink(temp_filename)
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temporary file: {cleanup_error}")
     
     async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
