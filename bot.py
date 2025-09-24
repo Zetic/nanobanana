@@ -217,55 +217,113 @@ async def handle_generation_request(message):
 async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
     try:
-        # Check if user can generate images
+        # Get user's model preference
+        user_model = usage_tracker.get_user_model_preference(user.id)
+        logger.info(f"User {user.id} model preference: {user_model}")
+        
+        # Check if user can generate images (for image-generating models)
         can_generate_images = usage_tracker.can_generate_image(user.id)
         daily_count_before = usage_tracker.get_daily_image_count(user.id)
         
-        # Generate based on available inputs and rate limit status
+        # Generate based on available inputs, rate limit status, and user's model preference
         generated_image = None
         genai_text_response = None
         usage_metadata = None
         
-        if not can_generate_images:
-            # User is rate limited for images - use text-only fallback
-            logger.info(f"User {user.id} is rate limited for images ({daily_count_before}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
-            
-            # Generate text-only response regardless of input type
+        # Handle different model types
+        if user_model == "chat":
+            # Chat model - always use text-only response
             if text_content.strip() or images:
-                # Use text content if available, otherwise provide generic prompt for image analysis
                 prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
                 generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
+            else:
+                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                return
                 
-                # Do NOT add rate limit notice to the response (requirement #4)
+        elif user_model == "gpt":
+            # GPT model - use OpenAI for image generation
+            if not can_generate_images:
+                # Rate limited - fall back to text-only
+                logger.info(f"User {user.id} is rate limited for images ({daily_count_before}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
+                if text_content.strip() or images:
+                    prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
+                else:
+                    await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                    return
             else:
-                # No content provided
-                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
-                return
+                # Generate using OpenAI (supports text-to-image with user's prompt)
+                if text_content.strip():
+                    # Use OpenAI for image generation with user's text content
+                    try:
+                        generated_image = await get_openai_image_generator().generate_meme(text_content.strip())
+                        genai_text_response = f"Generated using OpenAI based on: {text_content.strip()}"
+                        # OpenAI doesn't provide detailed usage metadata, so we'll use placeholder values
+                        usage_metadata = {
+                            "prompt_token_count": len(text_content.split()) * 2,  # Rough estimate
+                            "candidates_token_count": 10,  # Placeholder
+                            "total_token_count": len(text_content.split()) * 2 + 10,
+                        }
+                    except Exception as e:
+                        logger.error(f"OpenAI generation failed, falling back to text: {e}")
+                        generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(text_content.strip(), images)
+                else:
+                    # No text provided, use default OpenAI meme generation
+                    try:
+                        generated_image = await get_openai_image_generator().generate_meme()
+                        genai_text_response = "Generated a random meme using OpenAI"
+                        usage_metadata = {
+                            "prompt_token_count": 10,  # Placeholder
+                            "candidates_token_count": 10,  # Placeholder
+                            "total_token_count": 20,
+                        }
+                    except Exception as e:
+                        logger.error(f"OpenAI generation failed: {e}")
+                        await response_message.edit(content="Sorry, I couldn't generate an image using the GPT model right now. Please try again later or switch to a different model using `/model`.")
+                        return
+                    
         else:
-            # User can generate images - use normal flow
-            if images and text_content.strip():
-                # Text + Image(s) case
-                if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
-                        text_content, images[0]
-                    )
+            # Default "nanobanana" model - use Gemini
+            if not can_generate_images:
+                # User is rate limited for images - use text-only fallback
+                logger.info(f"User {user.id} is rate limited for images ({daily_count_before}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
+                
+                # Generate text-only response regardless of input type
+                if text_content.strip() or images:
+                    # Use text content if available, otherwise provide generic prompt for image analysis
+                    prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
+                    
+                    # Do NOT add rate limit notice to the response (requirement #4)
                 else:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
-                        text_content, images
-                    )
-            elif images:
-                # Image(s) only case - no text provided
-                if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
-                else:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
-            elif text_content.strip():
-                # Text only case
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+                    # No content provided
+                    await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                    return
             else:
-                # No content provided
-                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
-                return
+                # User can generate images - use normal Gemini flow
+                if images and text_content.strip():
+                    # Text + Image(s) case
+                    if len(images) == 1:
+                        generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
+                            text_content, images[0]
+                        )
+                    else:
+                        generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
+                            text_content, images
+                        )
+                elif images:
+                    # Image(s) only case - no text provided
+                    if len(images) == 1:
+                        generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
+                    else:
+                        generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
+                elif text_content.strip():
+                    # Text only case
+                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+                else:
+                    # No content provided
+                    await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+                    return
         
         # Track usage if we have metadata and a user
         send_limit_warning = False
@@ -392,6 +450,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
+• `/model` - Switch between AI models (nanobanana, GPT, or chat)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)"""
@@ -596,6 +655,53 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
         logger.error(f"Error in reset command: {e}")
         await interaction.response.send_message(
             "An error occurred while resetting user usage. Please try again.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name='model', description='Switch between AI models for your generations')
+@app_commands.describe(model='The AI model to use for your generations')
+@app_commands.choices(model=[
+    app_commands.Choice(name='Nanobanana (Gemini - Default)', value='nanobanana'),
+    app_commands.Choice(name='GPT (OpenAI Image Generation)', value='gpt'),
+    app_commands.Choice(name='Chat (Text-Only Responses)', value='chat')
+])
+async def model_slash(interaction: discord.Interaction, model: app_commands.Choice[str]):
+    """Switch between AI models for your generations."""
+    try:
+        model_value = model.value
+        username = interaction.user.display_name or interaction.user.name
+        
+        # Set the user's model preference
+        success = usage_tracker.set_user_model_preference(interaction.user.id, username, model_value)
+        
+        if success:
+            model_descriptions = {
+                'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
+                'gpt': 'GPT - Image generation using OpenAI\'s models',
+                'chat': 'Chat - Text-only responses without image generation'
+            }
+            
+            description = model_descriptions.get(model_value, model_value)
+            await interaction.response.send_message(
+                f"✅ **Model preference updated!**\n\n"
+                f"Your selected model: **{model.name}**\n"
+                f"Description: {description}\n\n"
+                f"All your future generations will now use this model until you change it again.",
+                ephemeral=True
+            )
+            logger.info(f"User {username} ({interaction.user.id}) changed model preference to: {model_value}")
+        else:
+            await interaction.response.send_message(
+                "❌ **Error updating model preference**\n\n"
+                "There was an issue saving your model preference. Please try again.",
+                ephemeral=True
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in model command: {e}")
+        await interaction.response.send_message(
+            "An error occurred while updating your model preference. Please try again.",
             ephemeral=True
         )
 
