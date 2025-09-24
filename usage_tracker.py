@@ -106,7 +106,8 @@ class UsageTracker:
                     "requests_count": 0,
                     "first_use": datetime.now().isoformat(),
                     "last_use": datetime.now().isoformat(),
-                    "daily_images": {}  # Track images per day: {"2024-01-15": 3, "2024-01-16": 1}
+                    "daily_images": {},  # Track images per day: {"2024-01-15": 3, "2024-01-16": 1}
+                    "model_preference": "nanobanana"  # Default model preference
                 }
             
             user_data = data["users"][user_id_str]
@@ -242,6 +243,62 @@ class UsageTracker:
     def is_elevated_user(self, user_id: int) -> bool:
         """Check if a user has elevated status."""
         return user_id in config.ELEVATED_USERS
+    
+    def get_user_model_preference(self, user_id: int) -> str:
+        """Get the model preference for a specific user. Returns 'nanobanana' if not set or invalid."""
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            user_data = data["users"].get(user_id_str, {})
+            model = user_data.get("model_preference", "nanobanana")
+            
+            # Validate and return default if invalid
+            valid_models = {'nanobanana', 'gpt', 'chat'}
+            if model not in valid_models:
+                logger.warning(f"Invalid model preference '{model}' for user {user_id}, defaulting to 'nanobanana'")
+                return "nanobanana"
+            
+            return model
+    
+    def set_user_model_preference(self, user_id: int, username: str, model: str) -> bool:
+        """Set the model preference for a specific user. Returns True if successful."""
+        # Validate model value
+        valid_models = {'nanobanana', 'gpt', 'chat'}
+        if model not in valid_models:
+            logger.warning(f"Invalid model preference '{model}' for user {user_id}. Must be one of: {valid_models}")
+            return False
+            
+        try:
+            with self._lock:
+                data = self._load_usage_data()
+                user_id_str = str(user_id)
+                
+                # Ensure user entry exists
+                if user_id_str not in data["users"]:
+                    data["users"][user_id_str] = {
+                        "username": username,
+                        "total_prompt_tokens": 0,
+                        "total_output_tokens": 0,
+                        "total_tokens": 0,
+                        "images_generated": 0,
+                        "requests_count": 0,
+                        "first_use": datetime.now().isoformat(),
+                        "last_use": datetime.now().isoformat(),
+                        "daily_images": {},
+                        "model_preference": model
+                    }
+                else:
+                    # Update existing user's model preference and username
+                    data["users"][user_id_str]["model_preference"] = model
+                    data["users"][user_id_str]["username"] = username
+                    data["users"][user_id_str]["last_use"] = datetime.now().isoformat()
+                
+                self._save_usage_data(data)
+                logger.info(f"Set model preference for user {username} ({user_id}) to: {model}")
+                return True
+        except Exception as e:
+            logger.error(f"Error setting model preference for user {user_id}: {e}")
+            return False
 
 # Global instance
 usage_tracker = UsageTracker()

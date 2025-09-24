@@ -11,8 +11,7 @@ from typing import List, Dict, Any
 
 import config
 from image_utils import download_image
-from genai_client import ImageGenerator
-from openai_client import OpenAIImageGenerator
+from model_interface import get_model_generator
 from usage_tracker import usage_tracker
 from log_manager import log_manager
 
@@ -29,24 +28,6 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
-
-# Initialize image generator (will be created when first used)
-image_generator = None
-openai_image_generator = None
-
-def get_image_generator():
-    """Get or create the image generator instance."""
-    global image_generator
-    if image_generator is None:
-        image_generator = ImageGenerator()
-    return image_generator
-
-def get_openai_image_generator():
-    """Get or create the OpenAI image generator instance."""
-    global openai_image_generator
-    if openai_image_generator is None:
-        openai_image_generator = OpenAIImageGenerator()
-    return openai_image_generator
 
 @bot.event
 async def on_ready():
@@ -217,51 +198,52 @@ async def handle_generation_request(message):
 async def process_generation_request(response_message, text_content: str, images: List, user):
     """Process the generation request and edit the response message with the result."""
     try:
-        # Check if user can generate images
+        # Get user's model preference
+        user_model = usage_tracker.get_user_model_preference(user.id)
+        logger.info(f"User {user.id} model preference: {user_model}")
+        
+        # Get the appropriate model generator
+        generator = get_model_generator(user_model)
+        
+        # Check if user can generate images (for image-generating models)
         can_generate_images = usage_tracker.can_generate_image(user.id)
         daily_count_before = usage_tracker.get_daily_image_count(user.id)
         
-        # Generate based on available inputs and rate limit status
+        # Generate based on available inputs, rate limit status, and user's model preference
         generated_image = None
         genai_text_response = None
         usage_metadata = None
         
-        if not can_generate_images:
+        # Handle rate limiting for image models (nanobanana and gpt)
+        if user_model in ["nanobanana", "gpt"] and not can_generate_images:
             # User is rate limited for images - use text-only fallback
             logger.info(f"User {user.id} is rate limited for images ({daily_count_before}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
             
-            # Generate text-only response regardless of input type
             if text_content.strip() or images:
-                # Use text content if available, otherwise provide generic prompt for image analysis
                 prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_text_only_response(prompt, images)
-                
-                # Do NOT add rate limit notice to the response (requirement #4)
+                generated_image, genai_text_response, usage_metadata = await generator.generate_text_only_response(prompt, images)
             else:
-                # No content provided
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
                 return
         else:
-            # User can generate images - use normal flow
+            # User can generate images or is using chat model
             if images and text_content.strip():
                 # Text + Image(s) case
                 if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_image(
+                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
                         text_content, images[0]
                     )
                 else:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text_and_images(
-                        text_content, images
+                    # For multiple images, use the first one (most generators don't support multiple)
+                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
+                        text_content, images[0]
                     )
             elif images:
                 # Image(s) only case - no text provided
-                if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_image_only(images[0])
-                else:
-                    generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_images_only(images)
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(images[0])
             elif text_content.strip():
                 # Text only case
-                generated_image, genai_text_response, usage_metadata = await get_image_generator().generate_image_from_text(text_content)
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(text_content)
             else:
                 # No content provided
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
@@ -392,6 +374,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
+• `/model` - Switch between AI models (nanobanana, GPT-5, or chat)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)"""
@@ -596,6 +579,72 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
         logger.error(f"Error in reset command: {e}")
         await interaction.response.send_message(
             "An error occurred while resetting user usage. Please try again.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name='model', description='Switch between AI models for your generations')
+@app_commands.describe(model='The AI model to use for your generations (leave empty to see current model)')
+@app_commands.choices(model=[
+    app_commands.Choice(name='Nanobanana (Gemini - Default)', value='nanobanana'),
+    app_commands.Choice(name='GPT-5 (OpenAI Image Generation)', value='gpt'),
+    app_commands.Choice(name='Chat (Text-Only Responses)', value='chat')
+])
+async def model_slash(interaction: discord.Interaction, model: app_commands.Choice[str] = None):
+    """Switch between AI models for your generations."""
+    try:
+        username = interaction.user.display_name or interaction.user.name
+        current_model = usage_tracker.get_user_model_preference(interaction.user.id)
+        
+        if model is None:
+            # Show current model preference
+            model_descriptions = {
+                'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
+                'gpt': 'GPT-5 - Advanced image generation using OpenAI\'s latest model', 
+                'chat': 'Chat - Text-only responses without image generation'
+            }
+            
+            current_description = model_descriptions.get(current_model, current_model)
+            await interaction.response.send_message(
+                f"**Your current AI model:**\n\n"
+                f"🤖 **{current_model.title()}**\n"
+                f"📝 {current_description}\n\n"
+                f"To change your model, use `/model` and select a different option.",
+                ephemeral=True
+            )
+        else:
+            # Set new model preference
+            model_value = model.value
+            success = usage_tracker.set_user_model_preference(interaction.user.id, username, model_value)
+            
+            if success:
+                model_descriptions = {
+                    'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
+                    'gpt': 'GPT-5 - Advanced image generation using OpenAI\'s latest model',
+                    'chat': 'Chat - Text-only responses without image generation'
+                }
+                
+                description = model_descriptions.get(model_value, model_value)
+                await interaction.response.send_message(
+                    f"✅ **Model preference updated!**\n\n"
+                    f"Previous model: **{current_model.title()}**\n"
+                    f"New model: **{model.name}**\n"
+                    f"Description: {description}\n\n"
+                    f"All your future generations will now use this model until you change it again.",
+                    ephemeral=True
+                )
+                logger.info(f"User {username} ({interaction.user.id}) changed model preference from {current_model} to: {model_value}")
+            else:
+                await interaction.response.send_message(
+                    "❌ **Error updating model preference**\n\n"
+                    "There was an issue saving your model preference. Please try again.",
+                    ephemeral=True
+                )
+            
+    except Exception as e:
+        logger.error(f"Error in model command: {e}")
+        await interaction.response.send_message(
+            "An error occurred while updating your model preference. Please try again.",
             ephemeral=True
         )
 
