@@ -406,6 +406,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
+• `/avatar` - Transform your avatar with themed templates (Halloween, etc.)
 • `/model` - Switch between AI models (nanobanana, GPT-5, or chat)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
@@ -613,6 +614,117 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
             "An error occurred while resetting user usage. Please try again.",
             ephemeral=True
         )
+
+
+@bot.tree.command(name='avatar', description='Transform your avatar with a themed template')
+@app_commands.describe(template='The template theme to apply to your avatar')
+@app_commands.choices(template=[
+    app_commands.Choice(name='Halloween', value='halloween')
+])
+async def avatar_slash(interaction: discord.Interaction, template: app_commands.Choice[str]):
+    """Transform user's avatar with a themed template."""
+    try:
+        # Defer the response since this will take some time
+        await interaction.response.defer()
+        
+        # Get the user's avatar URL
+        user = interaction.user
+        avatar_url = user.display_avatar.url
+        
+        logger.info(f"User {user.id} ({user.name}) requesting avatar transformation with template: {template.value}")
+        
+        # Download the user's avatar
+        avatar_image = await download_image(avatar_url)
+        if not avatar_image:
+            await interaction.followup.send("❌ Failed to download your avatar. Please try again.")
+            return
+        
+        # Get the prompt based on the template
+        template_prompts = {
+            'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject"
+        }
+        
+        prompt = template_prompts.get(template.value, template_prompts['halloween'])
+        
+        # Check if user can generate images
+        if not usage_tracker.can_generate_image(user.id):
+            remaining_images = usage_tracker.get_remaining_images_today(user.id)
+            reset_timestamp = usage_tracker._get_next_reset_timestamp()
+            await interaction.followup.send(
+                f"🚫 You've reached your cycle image generation limit ({config.DAILY_IMAGE_LIMIT} images). "
+                f"Your limit will reset <t:{reset_timestamp}:R>."
+            )
+            return
+        
+        # Get user's model preference
+        user_model = usage_tracker.get_user_model_preference(user.id)
+        generator = get_model_generator(user_model)
+        
+        # Generate the transformed avatar
+        generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
+            prompt, avatar_image
+        )
+        
+        # Track usage
+        if usage_metadata and not user.bot:
+            try:
+                prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+                output_tokens = usage_metadata.get("candidates_token_count", 0)
+                total_tokens = usage_metadata.get("total_token_count", 0)
+                images_generated = 1 if generated_image else 0
+                
+                usage_tracker.record_usage(
+                    user_id=user.id,
+                    username=user.display_name or user.name,
+                    prompt_tokens=prompt_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    images_generated=images_generated
+                )
+            except Exception as e:
+                logger.warning(f"Could not track usage: {e}")
+        
+        # Send the result
+        if generated_image:
+            # Save the image
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"avatar_{template.value}_{timestamp}.png"
+            
+            # Save to disk
+            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+            generated_image.save(filepath)
+            
+            # Save to buffer for Discord
+            img_buffer = io.BytesIO()
+            generated_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            
+            # Prepare the message
+            content = f"🎃 **{template.name} Avatar Transformation**"
+            if genai_text_response and genai_text_response.strip():
+                content += f"\n\n{genai_text_response}"
+            
+            await interaction.followup.send(
+                content=content,
+                file=discord.File(img_buffer, filename=filename)
+            )
+            logger.info(f"Successfully generated {template.value} avatar for user {user.id}")
+        else:
+            error_msg = "❌ Failed to generate your transformed avatar. Please try again."
+            if genai_text_response and genai_text_response.strip():
+                error_msg += f"\n\n{genai_text_response}"
+            await interaction.followup.send(error_msg)
+            
+    except Exception as e:
+        logger.error(f"Error in avatar command: {e}")
+        try:
+            await interaction.followup.send(
+                "An error occurred while transforming your avatar. Please try again.",
+                ephemeral=True
+            )
+        except:
+            # If followup fails, try to send a regular response
+            pass
 
 
 @bot.tree.command(name='model', description='Switch between AI models for your generations')
