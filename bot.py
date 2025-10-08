@@ -48,6 +48,12 @@ async def on_message(message):
     if message.author.bot:
         return
     
+    # Check if message is from a DM channel and user is not elevated
+    if is_dm_channel(message.channel) and not usage_tracker.is_elevated_user(message.author.id):
+        # Don't respond to non-elevated users in DM channels
+        logger.info(f"Blocked non-elevated user {message.author.id} from using bot in DM channel")
+        return
+    
     # Handle commands first
     await bot.process_commands(message)
     
@@ -66,6 +72,13 @@ def is_directly_mentioned(message_content, bot_user_id):
     nickname_mention = f'<@!{bot_user_id}>'
     
     return standard_mention in message_content or nickname_mention in message_content
+
+def is_dm_channel(channel) -> bool:
+    """
+    Check if a channel is a DM (Direct Message) channel.
+    Returns True for DMChannel and GroupChannel.
+    """
+    return isinstance(channel, (discord.DMChannel, discord.GroupChannel))
 
 def split_long_message(content: str, max_length: int = 1800) -> List[str]:
     """
@@ -377,6 +390,15 @@ async def process_generation_request(response_message, text_content: str, images
 @bot.tree.command(name='help', description='Show help information')
 async def help_slash(interaction: discord.Interaction):
     """Show help information (slash command)."""
+    # Check if interaction is from a DM channel and user is not elevated
+    if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+        await interaction.response.send_message(
+            "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+            ephemeral=True
+        )
+        logger.info(f"Blocked non-elevated user {interaction.user.id} from using /help in DM channel")
+        return
+    
     # Use interaction.client.user for safety and provide fallbacks
     bot_user = interaction.client.user
     bot_name = bot_user.display_name if bot_user else "Nano Banana"
@@ -417,6 +439,15 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 async def usage_slash(interaction: discord.Interaction):
     """Show token usage statistics (slash command) - elevated users only."""
     try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /usage in DM channel")
+            return
+        
         # Check if the command caller has elevated status
         if not usage_tracker.is_elevated_user(interaction.user.id):
             await interaction.response.send_message(
@@ -472,6 +503,15 @@ async def usage_slash(interaction: discord.Interaction):
 async def log_slash(interaction: discord.Interaction):
     """Get the most recent log file (slash command) - elevated users only."""
     try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /log in DM channel")
+            return
+        
         # Check if the command caller has elevated status
         if not usage_tracker.is_elevated_user(interaction.user.id):
             await interaction.response.send_message(
@@ -535,6 +575,15 @@ async def log_slash(interaction: discord.Interaction):
 async def reset_slash(interaction: discord.Interaction, user: discord.User):
     """Reset cycle image usage for a user (elevated users only)."""
     try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /reset in DM channel")
+            return
+        
         # Check if the command caller has elevated status
         if not usage_tracker.is_elevated_user(interaction.user.id):
             await interaction.response.send_message(
@@ -580,6 +629,15 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
 async def avatar_slash(interaction: discord.Interaction, template: app_commands.Choice[str]):
     """Transform user's avatar with a themed template."""
     try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /avatar in DM channel")
+            return
+        
         # Defer the response since this will take some time
         await interaction.response.defer()
         
@@ -693,6 +751,15 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
 async def model_slash(interaction: discord.Interaction, model: app_commands.Choice[str] = None):
     """Switch between AI models for your generations."""
     try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /model in DM channel")
+            return
+        
         username = interaction.user.display_name or interaction.user.name
         current_model = usage_tracker.get_user_model_preference(interaction.user.id)
         
