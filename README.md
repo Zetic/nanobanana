@@ -94,7 +94,7 @@ When you mention the bot in a reply to another message, it will automatically in
 
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
-- `/usage` - Show token usage statistics (elevated users only) - returns file
+- `/usage` - Show token usage statistics (elevated users only)
 - `/log` - Get the most recent log file (elevated users only)
 - `/reset` - Reset cycle image usage for a user (elevated users only)
 - `/meme` - Generate a nonsensical meme using OpenAI
@@ -104,11 +104,8 @@ When you mention the bot in a reply to another message, it will automatically in
 ### Usage Tracking
 
 The bot automatically tracks token usage for each Discord user:
-- **Input tokens**: Tokens used for prompts and image inputs
-- **Output tokens**: Tokens used for generated responses  
 - **Total tokens**: Combined input and output tokens
 - **Images generated**: Number of images created (limited to 15 per cycle)
-- **Request count**: Total number of requests made
 
 **Image Generation Limits:**
 - Users can generate up to **15 images per cycle**
@@ -117,7 +114,7 @@ The bot automatically tracks token usage for each Discord user:
 - Afternoon cycle: 12:00 - 23:59
 - Elevated users have unlimited image generation
 
-Use `/usage` to view statistics sorted by output token usage (elevated users only). Data is stored locally in JSON format with thread-safe operations for concurrent access.
+Use `/usage` to view condensed statistics showing total tokens and images for all users (elevated users only). The output is sent as text messages and automatically split if needed for large user lists. Data is stored locally in JSON format with thread-safe operations for concurrent access.
 
 ### Logging
 

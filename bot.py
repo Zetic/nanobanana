@@ -5,7 +5,6 @@ import logging
 import asyncio
 import io
 import os
-import tempfile
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
@@ -433,84 +432,41 @@ async def usage_slash(interaction: discord.Interaction):
             await interaction.response.send_message("No usage data available yet. Start using the bot to generate some statistics!")
             return
         
-        # Build the response message
+        # Build the condensed response message
         usage_text = "**🍌 Token Usage Statistics**\n\n"
         
-        # Add overall stats
-        usage_text += f"**📊 Overall Statistics:**\n"
-        usage_text += f"• Total Users: {total_stats['total_users']}\n"
-        usage_text += f"• Total Requests: {total_stats['total_requests']}\n"
-        usage_text += f"• Total Input Tokens: {total_stats['total_prompt_tokens']:,}\n"
-        usage_text += f"• Total Output Tokens: {total_stats['total_output_tokens']:,}\n"
-        usage_text += f"• Total Tokens: {total_stats['total_tokens']:,}\n"
-        usage_text += f"• Images Generated: {total_stats['total_images_generated']}\n\n"
+        # Add overall stats (condensed)
+        usage_text += f"**📊 Overall:**\n"
+        usage_text += f"Total Users: {total_stats['total_users']} | "
+        usage_text += f"Total Tokens: {total_stats['total_tokens']:,} | "
+        usage_text += f"Images: {total_stats['total_images_generated']}\n\n"
         
-        # Add top users (limit to top 10 to avoid message length issues)
-        usage_text += "**👑 Top Users by Output Tokens:**\n"
-        
-        top_users = users_list[:10]  # Limit to top 10
-        for i, (user_id, user_data) in enumerate(top_users, 1):
+        # Add all users with condensed info
+        usage_text += "**👤 Users:**\n"
+        for i, (user_id, user_data) in enumerate(users_list, 1):
             username = user_data.get('username', 'Unknown User')
-            output_tokens = user_data.get('total_output_tokens', 0)
-            input_tokens = user_data.get('total_prompt_tokens', 0)
             total_tokens = user_data.get('total_tokens', 0)
             images = user_data.get('images_generated', 0)
-            requests = user_data.get('requests_count', 0)
             
-            usage_text += f"{i}. **{username}**\n"
-            usage_text += f"   • Output Tokens: {output_tokens:,}\n"
-            usage_text += f"   • Input Tokens: {input_tokens:,}\n"
-            usage_text += f"   • Total Tokens: {total_tokens:,}\n"
-            usage_text += f"   • Images: {images} | Requests: {requests}\n\n"
+            usage_text += f"{i}. {username}: {total_tokens:,} tokens, {images} images\n"
         
-        if len(users_list) > 10:
-            usage_text += f"... and {len(users_list) - 10} more users.\n"
+        # Split message into chunks if needed and send
+        chunks = split_long_message(usage_text)
         
-        # Generate more comprehensive data for the file (no Discord character limits)
-        if len(users_list) > 10:
-            usage_text += "\n**📋 Complete User List:**\n"
-            for i, (user_id, user_data) in enumerate(users_list, 1):
-                username = user_data.get('username', 'Unknown User')
-                output_tokens = user_data.get('total_output_tokens', 0)
-                input_tokens = user_data.get('total_prompt_tokens', 0)
-                total_tokens = user_data.get('total_tokens', 0)
-                images = user_data.get('images_generated', 0)
-                requests = user_data.get('requests_count', 0)
-                
-                usage_text += f"{i}. **{username}** (ID: {user_id})\n"
-                usage_text += f"   • Output Tokens: {output_tokens:,}\n"
-                usage_text += f"   • Input Tokens: {input_tokens:,}\n"
-                usage_text += f"   • Total Tokens: {total_tokens:,}\n"
-                usage_text += f"   • Images: {images} | Requests: {requests}\n\n"
+        # Send the first chunk as response
+        await interaction.response.send_message(chunks[0], ephemeral=True)
         
-        # Add timestamp
-        usage_text += f"\n---\nGenerated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-        
-        # Create a temporary file with the usage statistics
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as temp_file:
-            temp_file.write(usage_text)
-            temp_file_path = temp_file.name
-        
-        try:
-            # Send the file
-            with open(temp_file_path, 'rb') as file:
-                discord_file = discord.File(file, filename=f'usage_stats_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
-                await interaction.response.send_message(
-                    "📊 **Usage Statistics Report**\nHere are the current token usage statistics:",
-                    file=discord_file,
-                    ephemeral=True
-                )
-        finally:
-            # Clean up the temporary file
-            try:
-                os.unlink(temp_file_path)
-            except Exception:
-                pass
+        # Send remaining chunks as follow-ups
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk, ephemeral=True)
         
     except Exception as e:
         logger.error(f"Error getting usage statistics: {e}")
-        await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.")
+        # Check if we've already responded
+        if interaction.response.is_done():
+            await interaction.followup.send("An error occurred while retrieving usage statistics. Please try again.", ephemeral=True)
+        else:
+            await interaction.response.send_message("An error occurred while retrieving usage statistics. Please try again.", ephemeral=True)
 
 @bot.tree.command(name='log', description='Get the most recent log file (elevated users only)')
 async def log_slash(interaction: discord.Interaction):
