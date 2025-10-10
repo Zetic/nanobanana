@@ -7,6 +7,7 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - **Text-to-Image Generation**: Create images from descriptive text prompts
 - **Image-to-Image Transformation**: Transform uploaded images using AI  
 - **Multi-Image Processing**: Process multiple images simultaneously
+- **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
 - **Meme Generation**: Generate nonsensical memes using OpenAI
 - **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply (text from original message is ignored)
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
@@ -79,6 +80,19 @@ python main.py
   ```
   @Nano Banana make this change (as a reply to a message with images)
   ```
+
+- **Specify aspect ratios** for image generation:
+  ```
+  @Nano Banana Create a cinematic landscape -21:9
+  @Nano Banana Make this portrait -9:16
+  @Nano Banana Generate a square image -1:1
+  ```
+
+**Supported Aspect Ratios:**
+- **Landscape**: `-21:9`, `-16:9`, `-4:3`, `-3:2`
+- **Square**: `-1:1`
+- **Portrait**: `-9:16`, `-3:4`, `-2:3`
+- **Flexible**: `-5:4`, `-4:5`
 
 The bot will respond naturally based on what the AI generates:
 - **Text responses** when the AI provides text
@@ -191,6 +205,13 @@ The bot uses multiple AI providers:
 @Nano Banana Combine these characters in an epic battle scene
 ```
 *(with multiple images attached)*
+
+### Aspect Ratio Control
+```
+@Nano Banana Create a cinematic scene of a nano banana -21:9
+@Nano Banana Make this portrait style -9:16
+@Nano Banana Generate a square avatar -1:1
+```
 
 ### Meme Generation
 ```
