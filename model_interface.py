@@ -21,17 +21,17 @@ class BaseModelGenerator(ABC):
     """Abstract base class for AI model generators."""
     
     @abstractmethod
-    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt. Returns (image, text_response, usage_metadata)."""
         pass
     
     @abstractmethod  
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image. Returns (image, text_response, usage_metadata)."""
         pass
     
     @abstractmethod
-    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only. Returns (image, text_response, usage_metadata)."""
         pass
         
@@ -119,12 +119,24 @@ class GeminiModelGenerator(BaseModelGenerator):
                 "cached_content_token_count": 0,
             }
     
-    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
         try:
+            # Build config for generate_content
+            config_params = {
+                "response_modalities": ["IMAGE"]
+            }
+            
+            # Add aspect ratio to image config if specified
+            if aspect_ratio:
+                config_params["image_config"] = types.ImageConfig(
+                    aspect_ratio=aspect_ratio
+                )
+            
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
+                config=types.GenerateContentConfig(**config_params)
             )
             
             image = self._extract_image_from_response(response)
@@ -137,7 +149,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image from text: {e}")
             return None, None, None
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image."""
         try:
             # Convert PIL Image to bytes for API
@@ -151,9 +163,21 @@ class GeminiModelGenerator(BaseModelGenerator):
                 mime_type='image/png'
             )
             
+            # Build config for generate_content
+            config_params = {
+                "response_modalities": ["IMAGE"]
+            }
+            
+            # Add aspect ratio to image config if specified
+            if aspect_ratio:
+                config_params["image_config"] = types.ImageConfig(
+                    aspect_ratio=aspect_ratio
+                )
+            
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt, image_part],
+                config=types.GenerateContentConfig(**config_params)
             )
             
             image = self._extract_image_from_response(response)
@@ -166,11 +190,11 @@ class GeminiModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image from text and image: {e}")
             return None, None, None
     
-    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only with generic transformation prompt."""
         try:
             generic_prompt = "Transform this image in an interesting and creative way"
-            return await self.generate_image_from_text_and_image(generic_prompt, input_image, streaming_callback)
+            return await self.generate_image_from_text_and_image(generic_prompt, input_image, streaming_callback, aspect_ratio)
         except Exception as e:
             logger.error(f"Error generating image from image only: {e}")
             return None, None, None
@@ -410,15 +434,15 @@ class GPTModelGenerator(BaseModelGenerator):
             except Exception as cleanup_error:
                 logger.warning(f"Failed to cleanup temporary file: {cleanup_error}")
     
-    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
         return await self._generate_image_only(prompt, streaming_callback)
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from both text prompt and input image."""
         return await self._generate_image_with_input_images(prompt, [input_image], streaming_callback)
     
-    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from input image only."""
         # Use a generic creative prompt for image-only generation
         generic_prompt = "Transform this image in a creative and interesting way"
@@ -531,15 +555,15 @@ class ChatModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating text response: {e}")
             return None, None, None
     
-    async def generate_image_from_text(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         return await self._generate_text_response(prompt)
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         return await self._generate_text_response(prompt, [input_image])
     
-    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         generic_prompt = "Please provide a text description or analysis of the provided content."
         return await self._generate_text_response(generic_prompt, [input_image])

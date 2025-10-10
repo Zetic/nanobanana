@@ -5,8 +5,9 @@ import logging
 import asyncio
 import io
 import os
+import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 
 import config
 from image_utils import download_image
@@ -124,6 +125,45 @@ def split_long_message(content: str, max_length: int = 1800) -> List[str]:
     
     return chunks
 
+def extract_aspect_ratio(text: str) -> Tuple[Optional[str], str]:
+    """
+    Extract aspect ratio from text in the format -X:Y (e.g., -16:9).
+    Only accepts specific valid aspect ratios.
+    
+    Args:
+        text: The input text to search for aspect ratio
+        
+    Returns:
+        Tuple of (aspect_ratio, cleaned_text) where aspect_ratio is None if not found
+        or invalid, and cleaned_text has the aspect ratio pattern removed.
+    """
+    # Supported aspect ratios as specified in the issue
+    VALID_ASPECT_RATIOS = {
+        '21:9', '16:9', '4:3', '3:2',  # Landscape
+        '1:1',  # Square
+        '9:16', '3:4', '2:3',  # Portrait
+        '5:4', '4:5'  # Flexible
+    }
+    
+    # Pattern to match -X:Y format where X and Y are numbers
+    # Use word boundaries to avoid matching in the middle of text
+    pattern = r'-(\d+:\d+)\b'
+    
+    match = re.search(pattern, text)
+    
+    if match:
+        aspect_ratio = match.group(1)
+        # Only return if it's a valid aspect ratio
+        if aspect_ratio in VALID_ASPECT_RATIOS:
+            # Remove the aspect ratio pattern from the text
+            cleaned_text = re.sub(pattern, '', text, count=1).strip()
+            # Clean up any double spaces
+            cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+            return aspect_ratio, cleaned_text
+    
+    # No valid aspect ratio found, return original text
+    return None, text
+
 async def extract_text_from_message(message):
     """Extract text content from a message, removing bot mentions."""
     content = message.content
@@ -144,6 +184,12 @@ async def handle_generation_request(message):
         
         # Extract text content and download images
         text_content = await extract_text_from_message(message)
+        
+        # Extract aspect ratio from text content
+        aspect_ratio, text_content = extract_aspect_ratio(text_content)
+        if aspect_ratio:
+            logger.info(f"Aspect ratio detected: {aspect_ratio}")
+        
         images = []
         
         # Download attached images from the mentioning message
@@ -181,7 +227,7 @@ async def handle_generation_request(message):
                 # Continue processing even if we can't fetch the original message
         
         # Process based on inputs
-        await process_generation_request(response_message, text_content, images, message.author)
+        await process_generation_request(response_message, text_content, images, message.author, aspect_ratio)
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
@@ -194,7 +240,7 @@ async def handle_generation_request(message):
         except:
             pass
 
-async def process_generation_request(response_message, text_content: str, images: List, user):
+async def process_generation_request(response_message, text_content: str, images: List, user, aspect_ratio: Optional[str] = None):
     """Process the generation request and edit the response message with the result."""
     try:
         # Get user's model preference
@@ -258,22 +304,22 @@ async def process_generation_request(response_message, text_content: str, images
                 # Text + Image(s) case
                 if len(images) == 1:
                     generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0], streaming_callback if user_model == "gpt" else None
+                        text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
                     )
                 else:
                     # For multiple images, use the first one (most generators don't support multiple)
                     generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0], streaming_callback if user_model == "gpt" else None
+                        text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
                     )
             elif images:
                 # Image(s) only case - no text provided
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                    images[0], streaming_callback if user_model == "gpt" else None
+                    images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
                 )
             elif text_content.strip():
                 # Text only case
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
-                    text_content, streaming_callback if user_model == "gpt" else None
+                    text_content, streaming_callback if user_model == "gpt" else None, aspect_ratio
                 )
             else:
                 # No content provided
