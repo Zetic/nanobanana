@@ -439,15 +439,23 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • `{bot_mention} Create a nano banana in space`
 • `{bot_mention} Make this cat magical` (with image attached)
 • `{bot_mention} Transform this into cyberpunk style` (with multiple images)
+• `{bot_mention} Create a landscape photo -16:9` (specify aspect ratio)
 • Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
 
 **Features:**
 • Text-to-image generation
 • Image-to-image transformation  
 • Multiple image processing
+• Aspect ratio control (use `-16:9`, `-21:9`, `-4:3`, `-1:1`, `-9:16`, etc.)
 • Reply message support (uses images from original message, ignores text)
 • Natural text responses
 • Powered by Google Gemini AI
+
+**Supported Aspect Ratios:**
+• Landscape: `-21:9`, `-16:9`, `-4:3`, `-3:2`
+• Square: `-1:1`
+• Portrait: `-9:16`, `-3:4`, `-2:3`
+• Flexible: `-5:4`, `-4:5`
 
 **Slash Commands:**
 • `/help` - Show this help message
