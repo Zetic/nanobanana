@@ -280,6 +280,9 @@ async def process_generation_request(response_message, text_content: str, images
             if text_content.strip() or images:
                 prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
                 generated_image, genai_text_response, usage_metadata = await generator.generate_text_only_response(prompt, images)
+                # Prepend rate limit message to the response
+                if genai_text_response:
+                    genai_text_response = f"Text only response: {daily_count_before}/{config.DAILY_IMAGE_LIMIT} Images generated today.\n\n{genai_text_response}"
             else:
                 await response_message.edit(content="Please provide some text or attach an image for me to work with!")
                 return
@@ -320,15 +323,21 @@ async def process_generation_request(response_message, text_content: str, images
                         text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
                     )
                 else:
-                    # For multiple images, use the first one (most generators don't support multiple)
+                    # For multiple images, pass first as primary and rest as additional
                     generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
+                        text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
                     )
             elif images:
                 # Image(s) only case - no text provided
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                    images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
-                )
+                if len(images) == 1:
+                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
+                        images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
+                    )
+                else:
+                    # For multiple images, pass first as primary and rest as additional
+                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
+                        images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
+                    )
             elif text_content.strip():
                 # Text only case
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
@@ -533,7 +542,11 @@ async def usage_slash(interaction: discord.Interaction):
             total_tokens = user_data.get('total_tokens', 0)
             images = user_data.get('images_generated', 0)
             
-            usage_text += f"{i}. {username}: {total_tokens:,} tokens, {images} images\n"
+            # Get daily image count for this user
+            daily_count = usage_tracker.get_daily_image_count(int(user_id))
+            daily_rate = f"{daily_count}/{config.DAILY_IMAGE_LIMIT}"
+            
+            usage_text += f"{i}. {username}: {total_tokens:,} tokens, {images} images, {daily_rate} today\n"
         
         # Split message into chunks if needed and send
         chunks = split_long_message(usage_text)
