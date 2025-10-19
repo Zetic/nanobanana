@@ -583,7 +583,7 @@ class ChatModelGenerator(BaseModelGenerator):
         """Chat model doesn't generate images, only text responses."""
         return await self._generate_text_response(prompt)
     
-    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None, additional_images: List[Image.Image] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None, additional_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Chat model doesn't generate images, only text responses."""
         # Combine all images into a list
         all_images = [input_image]
