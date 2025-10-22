@@ -55,6 +55,17 @@ async def on_message(message):
         logger.info(f"Blocked non-elevated user {message.author.id} from using bot in DM channel")
         return
     
+    # Check if user has reached usage limit (only for non-elevated users)
+    if not usage_tracker.is_elevated_user(message.author.id) and usage_tracker.has_reached_usage_limit(message.author.id):
+        # Check if this message involves the bot (mention or command)
+        bot_mentioned = is_directly_mentioned(message.content, bot.user.id)
+        is_command = message.content.startswith(config.COMMAND_PREFIX)
+        
+        if bot_mentioned or is_command:
+            await message.reply(f"Daily usage limit reached for {message.author.mention} try again tomorrow.")
+            logger.info(f"Blocked user {message.author.id} from using bot - usage limit reached")
+            return
+    
     # Handle commands first
     await bot.process_commands(message)
     
@@ -80,6 +91,27 @@ def is_dm_channel(channel) -> bool:
     Returns True for DMChannel and GroupChannel.
     """
     return isinstance(channel, (discord.DMChannel, discord.GroupChannel))
+
+async def check_usage_limit_and_respond(interaction: discord.Interaction) -> bool:
+    """
+    Check if user has reached usage limit and send appropriate message.
+    Returns True if user should be blocked (limit reached), False if they can proceed.
+    """
+    # Elevated users are never blocked
+    if usage_tracker.is_elevated_user(interaction.user.id):
+        return False
+    
+    # Check if user has reached limit
+    if usage_tracker.has_reached_usage_limit(interaction.user.id):
+        await interaction.response.send_message(
+            f"Daily usage limit reached for {interaction.user.mention} try again tomorrow.",
+            ephemeral=True
+        )
+        logger.info(f"Blocked user {interaction.user.id} from using slash command - usage limit reached")
+        return True
+    
+    return False
+
 
 def split_long_message(content: str, max_length: int = 1800) -> List[str]:
     """
@@ -272,81 +304,66 @@ async def process_generation_request(response_message, text_content: str, images
         genai_text_response = None
         usage_metadata = None
         
-        # Handle rate limiting for image models (nanobanana and gpt)
-        if user_model in ["nanobanana", "gpt"] and not can_generate_images:
-            # User is rate limited for images - use text-only fallback
-            logger.info(f"User {user.id} is rate limited for images ({daily_count_before}/{config.DAILY_IMAGE_LIMIT}), using text-only fallback")
-            
-            if text_content.strip() or images:
-                prompt = text_content.strip() if text_content.strip() else "Please provide a text description or analysis of the provided content."
-                generated_image, genai_text_response, usage_metadata = await generator.generate_text_only_response(prompt, images)
-                # Prepend rate limit message to the response
-                if genai_text_response:
-                    genai_text_response = f"Text only response: {daily_count_before}/{config.DAILY_IMAGE_LIMIT} Images generated today.\n\n{genai_text_response}"
-            else:
-                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
-                return
-        else:
-            # Create streaming callback for image-generating models that support it (gpt)
-            async def streaming_callback(message_text, partial_image=None):
-                """Update Discord message with streaming progress and partial images."""
+        # Create streaming callback for image-generating models that support it (gpt)
+        async def streaming_callback(message_text, partial_image=None):
+            """Update Discord message with streaming progress and partial images."""
+            try:
+                if partial_image:
+                    # Send partial image to Discord instead of just text
+                    # Save partial image to buffer for Discord
+                    img_buffer = io.BytesIO()
+                    partial_image.save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+                    
+                    # Create Discord file from buffer
+                    import discord
+                    discord_file = discord.File(img_buffer, filename=f"partial_image.png")
+                    
+                    # Update message with partial image
+                    await response_message.edit(content=message_text, attachments=[discord_file])
+                else:
+                    # Fallback to text-only update
+                    await response_message.edit(content=message_text)
+            except Exception as e:
+                logger.warning(f"Failed to update streaming message: {e}")
+                # Fallback to text-only if image fails
                 try:
-                    if partial_image:
-                        # Send partial image to Discord instead of just text
-                        # Save partial image to buffer for Discord
-                        img_buffer = io.BytesIO()
-                        partial_image.save(img_buffer, format='PNG')
-                        img_buffer.seek(0)
-                        
-                        # Create Discord file from buffer
-                        import discord
-                        discord_file = discord.File(img_buffer, filename=f"partial_image.png")
-                        
-                        # Update message with partial image
-                        await response_message.edit(content=message_text, attachments=[discord_file])
-                    else:
-                        # Fallback to text-only update
-                        await response_message.edit(content=message_text)
-                except Exception as e:
-                    logger.warning(f"Failed to update streaming message: {e}")
-                    # Fallback to text-only if image fails
-                    try:
-                        await response_message.edit(content=message_text)
-                    except Exception as e2:
-                        logger.warning(f"Failed to update with text fallback: {e2}")
-            
-            # User can generate images or is using chat model
-            if images and text_content.strip():
-                # Text + Image(s) case
-                if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
-                    )
-                else:
-                    # For multiple images, pass first as primary and rest as additional
-                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                        text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
-                    )
-            elif images:
-                # Image(s) only case - no text provided
-                if len(images) == 1:
-                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                        images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
-                    )
-                else:
-                    # For multiple images, pass first as primary and rest as additional
-                    generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                        images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
-                    )
-            elif text_content.strip():
-                # Text only case
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
-                    text_content, streaming_callback if user_model == "gpt" else None, aspect_ratio
+                    await response_message.edit(content=message_text)
+                except Exception as e2:
+                    logger.warning(f"Failed to update with text fallback: {e2}")
+        
+        # User can generate images or is using chat model
+        if images and text_content.strip():
+            # Text + Image(s) case
+            if len(images) == 1:
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
+                    text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
                 )
             else:
-                # No content provided
-                await response_message.edit(content="Please provide some text or attach an image for me to work with!")
-                return
+                # For multiple images, pass first as primary and rest as additional
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
+                    text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
+                )
+        elif images:
+            # Image(s) only case - no text provided
+            if len(images) == 1:
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
+                    images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
+                )
+            else:
+                # For multiple images, pass first as primary and rest as additional
+                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
+                    images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
+                )
+        elif text_content.strip():
+            # Text only case
+            generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
+                text_content, streaming_callback if user_model == "gpt" else None, aspect_ratio
+            )
+        else:
+            # No content provided
+            await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+            return
         
         # Track usage if we have metadata and a user
         send_limit_warning = False
@@ -452,6 +469,10 @@ async def help_slash(interaction: discord.Interaction):
             ephemeral=True
         )
         logger.info(f"Blocked non-elevated user {interaction.user.id} from using /help in DM channel")
+        return
+    
+    # Check usage limit
+    if await check_usage_limit_and_respond(interaction):
         return
     
     # Use interaction.client.user for safety and provide fallbacks
@@ -705,6 +726,10 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
             logger.info(f"Blocked non-elevated user {interaction.user.id} from using /avatar in DM channel")
             return
         
+        # Check usage limit
+        if await check_usage_limit_and_respond(interaction):
+            return
+        
         # Defer the response since this will take some time
         await interaction.response.defer()
         
@@ -726,16 +751,6 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         }
         
         prompt = template_prompts.get(template.value, template_prompts['halloween'])
-        
-        # Check if user can generate images
-        if not usage_tracker.can_generate_image(user.id):
-            remaining_images = usage_tracker.get_remaining_images_today(user.id)
-            reset_timestamp = usage_tracker._get_next_reset_timestamp()
-            await interaction.followup.send(
-                f"🚫 You've reached your cycle image generation limit ({config.DAILY_IMAGE_LIMIT} images). "
-                f"Your limit will reset <t:{reset_timestamp}:R>."
-            )
-            return
         
         # Get user's model preference
         user_model = usage_tracker.get_user_model_preference(user.id)
@@ -825,6 +840,10 @@ async def model_slash(interaction: discord.Interaction, model: app_commands.Choi
                 ephemeral=True
             )
             logger.info(f"Blocked non-elevated user {interaction.user.id} from using /model in DM channel")
+            return
+        
+        # Check usage limit
+        if await check_usage_limit_and_respond(interaction):
             return
         
         username = interaction.user.display_name or interaction.user.name
