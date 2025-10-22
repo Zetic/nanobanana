@@ -197,6 +197,15 @@ class UsageTracker:
             
             return daily_images.get(current_cycle, 0)
     
+    def has_reached_usage_limit(self, user_id: int) -> bool:
+        """Check if a user has reached their usage limit for the current cycle."""
+        # Elevated users never reach usage limit
+        if user_id in config.ELEVATED_USERS:
+            return False
+        
+        cycle_count = self.get_daily_image_count(user_id)
+        return cycle_count >= config.DAILY_IMAGE_LIMIT
+    
     def can_generate_image(self, user_id: int) -> bool:
         """Check if a user can generate an image in the current cycle (within cycle limit or is elevated user)."""
         # Check if user is elevated (not bound by limitations)
