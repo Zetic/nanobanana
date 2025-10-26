@@ -64,9 +64,17 @@ async def on_message(message):
             is_command = message.content.startswith(config.COMMAND_PREFIX)
             
             if bot_mentioned or is_command:
-                # Send ephemeral-like message and react with wilted_rose
-                await message.reply("Zetic doesn't pay me enough to cover that request so try again later", 
-                                  delete_after=30)
+                # Send ephemeral message via DM (only that user sees it) and react with wilted_rose
+                try:
+                    await message.author.send("Zetic doesn't pay me enough to cover that request so try again later")
+                except discord.Forbidden:
+                    # If DM fails (user has DMs disabled), fall back to a reply that deletes quickly
+                    logger.warning(f"Could not DM user {message.author.id}, using reply instead")
+                    await message.reply("Zetic doesn't pay me enough to cover that request so try again later", 
+                                      delete_after=10)
+                except Exception as e:
+                    logger.error(f"Error sending rate limit message to user {message.author.id}: {e}")
+                
                 try:
                     await message.add_reaction("🥀")  # wilted_rose emoji
                 except Exception as e:
