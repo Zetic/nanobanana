@@ -2,8 +2,8 @@ import json
 import os
 import logging
 import threading
-from typing import Dict, Any, List, Tuple
-from datetime import datetime, date, time
+from typing import Dict, Any, List, Tuple, Optional
+from datetime import datetime, date, time, timedelta
 import config
 
 logger = logging.getLogger(__name__)
@@ -15,38 +15,7 @@ class UsageTracker:
         self.usage_file = os.path.join(config.GENERATED_IMAGES_DIR, 'usage_stats.json')
         self._lock = threading.Lock()
         self._ensure_usage_file_exists()
-    
-    def _get_current_cycle_key(self) -> str:
-        """
-        Get the current cycle key based on time.
-        Cycles reset at noon (12:00) and midnight (00:00).
-        Returns format: "2024-01-15-morning" or "2024-01-15-afternoon"
-        """
-        now = datetime.now()
-        today = now.date().isoformat()
-        
-        # Morning cycle: 00:00 - 11:59
-        # Afternoon cycle: 12:00 - 23:59
-        if now.time() < time(12, 0):
-            return f"{today}-morning"
-        else:
-            return f"{today}-afternoon"
-    
-    def _get_next_reset_timestamp(self) -> int:
-        """Get the timestamp for the next cycle reset (noon or midnight)."""
-        now = datetime.now()
-        today = now.date()
-        
-        if now.time() < time(12, 0):
-            # Currently in morning cycle, next reset is at noon
-            next_reset = datetime.combine(today, time(12, 0))
-        else:
-            # Currently in afternoon cycle, next reset is at midnight tomorrow
-            from datetime import timedelta
-            tomorrow = today + timedelta(days=1)
-            next_reset = datetime.combine(tomorrow, time(0, 0))
-        
-        return int(next_reset.timestamp())
+        self.rate_limit_hours = 8  # Each usage charge expires after 8 hours
     
     def _ensure_usage_file_exists(self):
         """Ensure the usage stats file exists with proper structure."""
@@ -60,6 +29,74 @@ class UsageTracker:
                     }
                     with open(self.usage_file, 'w') as f:
                         json.dump(initial_data, f, indent=2)
+    
+    def _get_available_usage_slots(self, user_id: int) -> int:
+        """
+        Get the number of available usage slots for a user.
+        Each slot expires 8 hours after it was used.
+        
+        Returns:
+            Number of available slots (0, 1, or 2)
+        """
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            if user_id_str not in data["users"]:
+                return config.DAILY_IMAGE_LIMIT  # All slots available for new users
+            
+            user_data = data["users"][user_id_str]
+            usage_timestamps = user_data.get("usage_timestamps", [])
+            
+            # Filter out timestamps older than 8 hours
+            now = datetime.now()
+            cutoff_time = now - timedelta(hours=self.rate_limit_hours)
+            
+            active_usages = [
+                ts for ts in usage_timestamps
+                if datetime.fromisoformat(ts) > cutoff_time
+            ]
+            
+            # Return number of available slots
+            return config.DAILY_IMAGE_LIMIT - len(active_usages)
+    
+    def _get_next_available_time(self, user_id: int) -> Optional[datetime]:
+        """
+        Get the timestamp when the next usage slot will become available.
+        
+        Returns:
+            datetime when next slot available, or None if slots are available now
+        """
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            if user_id_str not in data["users"]:
+                return None  # All slots available
+            
+            user_data = data["users"][user_id_str]
+            usage_timestamps = user_data.get("usage_timestamps", [])
+            
+            if not usage_timestamps:
+                return None  # All slots available
+            
+            # Filter out timestamps older than 8 hours
+            now = datetime.now()
+            cutoff_time = now - timedelta(hours=self.rate_limit_hours)
+            
+            active_usages = [
+                datetime.fromisoformat(ts) for ts in usage_timestamps
+                if datetime.fromisoformat(ts) > cutoff_time
+            ]
+            
+            if len(active_usages) < config.DAILY_IMAGE_LIMIT:
+                return None  # At least one slot is available
+            
+            # Find the oldest active usage and calculate when it expires
+            oldest_usage = min(active_usages)
+            next_available = oldest_usage + timedelta(hours=self.rate_limit_hours)
+            
+            return next_available
     
     def _load_usage_data(self) -> Dict[str, Any]:
         """Load usage data from JSON file."""
@@ -106,7 +143,7 @@ class UsageTracker:
                     "requests_count": 0,
                     "first_use": datetime.now().isoformat(),
                     "last_use": datetime.now().isoformat(),
-                    "daily_images": {},  # Track images per day: {"2024-01-15": 3, "2024-01-16": 1}
+                    "usage_timestamps": [],  # List of timestamps for each image generation
                     "model_preference": "nanobanana"  # Default model preference
                 }
             
@@ -119,12 +156,20 @@ class UsageTracker:
             user_data["requests_count"] += 1
             user_data["last_use"] = datetime.now().isoformat()
             
-            # Track images per cycle if any were generated
+            # Track image generation timestamp if any were generated
             if images_generated > 0:
-                current_cycle = self._get_current_cycle_key()
-                if "daily_images" not in user_data:
-                    user_data["daily_images"] = {}
-                user_data["daily_images"][current_cycle] = user_data["daily_images"].get(current_cycle, 0) + images_generated
+                if "usage_timestamps" not in user_data:
+                    user_data["usage_timestamps"] = []
+                
+                # Add timestamp for this usage
+                user_data["usage_timestamps"].append(datetime.now().isoformat())
+                
+                # Clean up old timestamps (older than 8 hours)
+                cutoff_time = datetime.now() - timedelta(hours=self.rate_limit_hours)
+                user_data["usage_timestamps"] = [
+                    ts for ts in user_data["usage_timestamps"]
+                    if datetime.fromisoformat(ts) > cutoff_time
+                ]
             
             self._save_usage_data(data)
             
@@ -183,7 +228,7 @@ class UsageTracker:
             return total_stats
 
     def get_daily_image_count(self, user_id: int) -> int:
-        """Get the number of images generated by a user in the current cycle."""
+        """Get the number of active usage charges for a user (within 8-hour window)."""
         with self._lock:
             data = self._load_usage_data()
             user_id_str = str(user_id)
@@ -192,41 +237,58 @@ class UsageTracker:
                 return 0
             
             user_data = data["users"][user_id_str]
-            daily_images = user_data.get("daily_images", {})
-            current_cycle = self._get_current_cycle_key()
+            usage_timestamps = user_data.get("usage_timestamps", [])
             
-            return daily_images.get(current_cycle, 0)
+            # Count timestamps within the 8-hour window
+            now = datetime.now()
+            cutoff_time = now - timedelta(hours=self.rate_limit_hours)
+            
+            active_count = sum(
+                1 for ts in usage_timestamps
+                if datetime.fromisoformat(ts) > cutoff_time
+            )
+            
+            return active_count
     
-    def has_reached_usage_limit(self, user_id: int) -> bool:
-        """Check if a user has reached their usage limit for the current cycle."""
+    def has_reached_usage_limit(self, user_id: int) -> Tuple[bool, Optional[datetime]]:
+        """
+        Check if a user has reached their usage limit (both slots are full).
+        
+        Returns:
+            Tuple of (has_reached_limit, next_available_time)
+        """
         # Elevated users never reach usage limit
         if user_id in config.ELEVATED_USERS:
-            return False
+            return False, None
         
-        cycle_count = self.get_daily_image_count(user_id)
-        return cycle_count >= config.DAILY_IMAGE_LIMIT
+        available_slots = self._get_available_usage_slots(user_id)
+        
+        if available_slots > 0:
+            return False, None
+        else:
+            next_available = self._get_next_available_time(user_id)
+            return True, next_available
     
     def can_generate_image(self, user_id: int) -> bool:
-        """Check if a user can generate an image in the current cycle (within cycle limit or is elevated user)."""
+        """Check if a user can generate an image (has at least one available slot)."""
         # Check if user is elevated (not bound by limitations)
         if user_id in config.ELEVATED_USERS:
             return True
         
-        cycle_count = self.get_daily_image_count(user_id)
-        return cycle_count < config.DAILY_IMAGE_LIMIT
+        available_slots = self._get_available_usage_slots(user_id)
+        return available_slots > 0
     
     def get_remaining_images_today(self, user_id: int) -> int:
-        """Get the number of images a user can still generate in the current cycle."""
+        """Get the number of available usage slots for a user."""
         # Elevated users have unlimited images
         if user_id in config.ELEVATED_USERS:
             return float('inf')
         
-        cycle_count = self.get_daily_image_count(user_id)
-        return max(0, config.DAILY_IMAGE_LIMIT - cycle_count)
+        return self._get_available_usage_slots(user_id)
     
     def reset_daily_usage(self, user_id: int) -> bool:
         """
-        Reset current cycle image usage for a specific user.
+        Reset usage timestamps for a specific user.
         Returns True if successful, False if user not found.
         """
         with self._lock:
@@ -237,16 +299,12 @@ class UsageTracker:
                 return False
             
             user_data = data["users"][user_id_str]
-            current_cycle = self._get_current_cycle_key()
             
-            # Reset current cycle's image count
-            if "daily_images" not in user_data:
-                user_data["daily_images"] = {}
-            
-            user_data["daily_images"][current_cycle] = 0
+            # Reset usage timestamps
+            user_data["usage_timestamps"] = []
             
             self._save_usage_data(data)
-            logger.info(f"Reset cycle usage for user {user_id} (cycle: {current_cycle})")
+            logger.info(f"Reset usage timestamps for user {user_id}")
             return True
     
     def is_elevated_user(self, user_id: int) -> bool:
@@ -293,7 +351,7 @@ class UsageTracker:
                         "requests_count": 0,
                         "first_use": datetime.now().isoformat(),
                         "last_use": datetime.now().isoformat(),
-                        "daily_images": {},
+                        "usage_timestamps": [],
                         "model_preference": model
                     }
                 else:

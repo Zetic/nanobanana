@@ -56,15 +56,23 @@ async def on_message(message):
         return
     
     # Check if user has reached usage limit (only for non-elevated users)
-    if not usage_tracker.is_elevated_user(message.author.id) and usage_tracker.has_reached_usage_limit(message.author.id):
-        # Check if this message involves the bot (mention or command)
-        bot_mentioned = is_directly_mentioned(message.content, bot.user.id)
-        is_command = message.content.startswith(config.COMMAND_PREFIX)
-        
-        if bot_mentioned or is_command:
-            await message.reply(f"Daily usage limit reached for {message.author.mention} try again tomorrow.")
-            logger.info(f"Blocked user {message.author.id} from using bot - usage limit reached")
-            return
+    if not usage_tracker.is_elevated_user(message.author.id):
+        has_limit, next_available = usage_tracker.has_reached_usage_limit(message.author.id)
+        if has_limit:
+            # Check if this message involves the bot (mention or command)
+            bot_mentioned = is_directly_mentioned(message.content, bot.user.id)
+            is_command = message.content.startswith(config.COMMAND_PREFIX)
+            
+            if bot_mentioned or is_command:
+                # Send ephemeral-like message and react with wilted_rose
+                await message.reply("Zetic doesn't pay me enough to cover that request so try again later", 
+                                  delete_after=30)
+                try:
+                    await message.add_reaction("🥀")  # wilted_rose emoji
+                except Exception as e:
+                    logger.warning(f"Failed to add reaction: {e}")
+                logger.info(f"Blocked user {message.author.id} from using bot - usage limit reached")
+                return
     
     # Handle commands first
     await bot.process_commands(message)
@@ -102,9 +110,10 @@ async def check_usage_limit_and_respond(interaction: discord.Interaction) -> boo
         return False
     
     # Check if user has reached limit
-    if usage_tracker.has_reached_usage_limit(interaction.user.id):
+    has_limit, next_available = usage_tracker.has_reached_usage_limit(interaction.user.id)
+    if has_limit:
         await interaction.response.send_message(
-            f"Daily usage limit reached for {interaction.user.mention} try again tomorrow.",
+            "Zetic doesn't pay me enough to cover that request so try again later",
             ephemeral=True
         )
         logger.info(f"Blocked user {interaction.user.id} from using slash command - usage limit reached")
@@ -295,10 +304,6 @@ async def process_generation_request(response_message, text_content: str, images
         # Get the appropriate model generator
         generator = get_model_generator(user_model)
         
-        # Check if user can generate images (for image-generating models)
-        can_generate_images = usage_tracker.can_generate_image(user.id)
-        daily_count_before = usage_tracker.get_daily_image_count(user.id)
-        
         # Generate based on available inputs, rate limit status, and user's model preference
         generated_image = None
         genai_text_response = None
@@ -383,10 +388,11 @@ async def process_generation_request(response_message, text_content: str, images
                     images_generated=images_generated
                 )
                 
-                # Check if this was the user's 5th image today (and they're not elevated)
+                # Check if this usage filled both slots (and they're not elevated)
+                available_after = usage_tracker._get_available_usage_slots(user.id)
                 if (images_generated > 0 and 
                     not usage_tracker.is_elevated_user(user.id) and
-                    daily_count_before + images_generated >= config.DAILY_IMAGE_LIMIT):
+                    available_after == 0):
                     send_limit_warning = True
                     
             except Exception as e:
@@ -437,16 +443,21 @@ async def process_generation_request(response_message, text_content: str, images
         else:
             await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
         
-        # Send ephemeral warning message if user just hit their limit (requirement #4)
+        # Send warning message if user just hit their limit
         if send_limit_warning:
             try:
-                # Get reset time (next cycle reset: noon or midnight)
-                reset_timestamp = usage_tracker._get_next_reset_timestamp()
+                # Get next available time
+                next_available = usage_tracker._get_next_available_time(user.id)
                 
-                warning_msg = (f"🚫 You've reached your cycle image generation limit "
-                             f"({config.DAILY_IMAGE_LIMIT} images). Your limit will reset <t:{reset_timestamp}:R>.")
+                if next_available:
+                    next_timestamp = int(next_available.timestamp())
+                    warning_msg = (f"⚠️ You've used both of your image generation slots. "
+                                 f"Your next slot will be available <t:{next_timestamp}:R>.")
+                else:
+                    warning_msg = (f"⚠️ You've used both of your image generation slots. "
+                                 f"Each slot resets 8 hours after use.")
                 
-                # Try to send as ephemeral reply
+                # Send as a message that auto-deletes
                 if hasattr(response_message, 'channel'):
                     await response_message.channel.send(warning_msg, delete_after=30)
             except Exception as e:
@@ -563,11 +574,11 @@ async def usage_slash(interaction: discord.Interaction):
             total_tokens = user_data.get('total_tokens', 0)
             images = user_data.get('images_generated', 0)
             
-            # Get daily image count for this user
-            daily_count = usage_tracker.get_daily_image_count(int(user_id))
-            daily_rate = f"{daily_count}/{config.DAILY_IMAGE_LIMIT}"
+            # Get active usage count for this user (within 8-hour window)
+            active_count = usage_tracker.get_daily_image_count(int(user_id))
+            usage_rate = f"{active_count}/{config.DAILY_IMAGE_LIMIT}"
             
-            usage_text += f"{i}. {username}: {total_tokens:,} tokens, {images} images, {daily_rate} today\n"
+            usage_text += f"{i}. {username}: {total_tokens:,} tokens, {images} images, {usage_rate} active\n"
         
         # Split message into chunks if needed and send
         chunks = split_long_message(usage_text)
@@ -684,13 +695,13 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
         success = usage_tracker.reset_daily_usage(user.id)
         
         if success:
-            # Get the user's current daily count after reset (should be 0)
+            # Get the user's current active count after reset (should be 0)
             new_count = usage_tracker.get_daily_image_count(user.id)
             username = user.display_name or user.name
             
             await interaction.response.send_message(
-                f"✅ Successfully reset cycle image usage for **{username}** (ID: {user.id}). "
-                f"Their current cycle count is now {new_count}/{config.DAILY_IMAGE_LIMIT}.",
+                f"✅ Successfully reset usage timestamps for **{username}** (ID: {user.id}). "
+                f"Their current active usage count is now {new_count}/{config.DAILY_IMAGE_LIMIT}.",
                 ephemeral=True
             )
             logger.info(f"Elevated user {interaction.user.id} reset usage for user {user.id}")
