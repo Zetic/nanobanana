@@ -3,7 +3,7 @@ import os
 import logging
 import threading
 from typing import Dict, Any, List, Tuple
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 import config
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,6 @@ class UsageTracker:
         today = now.date()
         
         # Next reset is always at midnight tomorrow
-        from datetime import timedelta
         tomorrow = today + timedelta(days=1)
         next_reset = datetime.combine(tomorrow, time(0, 0))
         
