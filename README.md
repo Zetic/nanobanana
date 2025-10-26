@@ -123,9 +123,10 @@ The bot automatically tracks token usage for each Discord user:
 
 **Image Generation Limits:**
 - Users can generate up to **2 images**, each with its own independent 8-hour timer
-- Each usage charge expires 8 hours after it was used
-- Rate limiting only occurs when both usage slots are full
-- Timer Example: If you generate images at 2:00 PM and 3:00 PM, the first slot becomes available at 10:00 PM, and the second at 11:00 PM
+- Each usage charge expires 8 hours after it was used (based on server time when the image was generated)
+- **You can still generate images as long as at least one slot is available**
+- Rate limiting only occurs when both usage slots are full (neither slot available)
+- Timer Example: If you generate images at 2:00 PM and 3:00 PM, the first slot becomes available 8 hours later at 10:00 PM, and the second slot at 11:00 PM
 - Elevated users have unlimited image generation
 
 Use `/usage` to view condensed statistics showing total tokens and images for all users (elevated users only). The output is sent as text messages and automatically split if needed for large user lists. Data is stored locally in JSON format with thread-safe operations for concurrent access.
