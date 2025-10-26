@@ -440,10 +440,10 @@ async def process_generation_request(response_message, text_content: str, images
         # Send ephemeral warning message if user just hit their limit (requirement #4)
         if send_limit_warning:
             try:
-                # Get reset time (next cycle reset: noon or midnight)
+                # Get reset time (next daily reset at midnight)
                 reset_timestamp = usage_tracker._get_next_reset_timestamp()
                 
-                warning_msg = (f"🚫 You've reached your cycle image generation limit "
+                warning_msg = (f"🚫 You've reached your daily image generation limit "
                              f"({config.DAILY_IMAGE_LIMIT} images). Your limit will reset <t:{reset_timestamp}:R>.")
                 
                 # Try to send as ephemeral reply
@@ -515,7 +515,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • `/model` - Switch between AI models (nanobanana, GPT-5, or chat)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
-• `/reset` - Reset cycle image usage for a user (elevated users only)"""
+• `/reset` - Reset daily image usage for a user (elevated users only)"""
     
     await interaction.response.send_message(help_text)
 
@@ -658,10 +658,10 @@ async def log_slash(interaction: discord.Interaction):
             ephemeral=True
         )
 
-@bot.tree.command(name='reset', description='Reset cycle image usage for a user (elevated users only)')
+@bot.tree.command(name='reset', description='Reset daily image usage for a user (elevated users only)')
 @app_commands.describe(user='The Discord user whose usage should be reset')
 async def reset_slash(interaction: discord.Interaction, user: discord.User):
-    """Reset cycle image usage for a user (elevated users only)."""
+    """Reset daily image usage for a user (elevated users only)."""
     try:
         # Check if interaction is from a DM channel and user is not elevated
         if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
@@ -689,8 +689,8 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
             username = user.display_name or user.name
             
             await interaction.response.send_message(
-                f"✅ Successfully reset cycle image usage for **{username}** (ID: {user.id}). "
-                f"Their current cycle count is now {new_count}/{config.DAILY_IMAGE_LIMIT}.",
+                f"✅ Successfully reset daily image usage for **{username}** (ID: {user.id}). "
+                f"Their current daily count is now {new_count}/{config.DAILY_IMAGE_LIMIT}.",
                 ephemeral=True
             )
             logger.info(f"Elevated user {interaction.user.id} reset usage for user {user.id}")
