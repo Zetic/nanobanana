@@ -119,13 +119,13 @@ When you mention the bot in a reply to another message, it will automatically in
 
 The bot automatically tracks token usage for each Discord user:
 - **Total tokens**: Combined input and output tokens
-- **Images generated**: Number of images created (limited to 15 per cycle)
+- **Images generated**: Number of images created (limited to 2 with independent 8-hour timers)
 
 **Image Generation Limits:**
-- Users can generate up to **15 images per cycle**
-- Cycles reset at **noon (12:00 PM)** and **midnight (00:00 AM)**
-- Morning cycle: 00:00 - 11:59
-- Afternoon cycle: 12:00 - 23:59
+- Users can generate up to **2 images**, each with its own independent 8-hour timer
+- Each usage charge expires 8 hours after it was used
+- Rate limiting only occurs when both usage slots are full
+- Timer Example: If you generate images at 2:00 PM and 3:00 PM, the first slot becomes available at 10:00 PM, and the second at 11:00 PM
 - Elevated users have unlimited image generation
 
 Use `/usage` to view condensed statistics showing total tokens and images for all users (elevated users only). The output is sent as text messages and automatically split if needed for large user lists. Data is stored locally in JSON format with thread-safe operations for concurrent access.
