@@ -29,6 +29,10 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
 
+# Track users currently processing requests (for safe rails)
+_processing_users = set()
+_processing_lock = asyncio.Lock()
+
 @bot.event
 async def on_ready():
     """Called when the bot is ready."""
@@ -231,58 +235,81 @@ async def extract_text_from_message(message):
 async def handle_generation_request(message):
     """Handle image generation request when bot is mentioned."""
     try:
-        # Send immediate response
-        response_message = await message.reply("Generating response...")
+        # Check if user is already processing a request
+        async with _processing_lock:
+            if message.author.id in _processing_users:
+                # User already has a request being processed, silently ignore or react
+                logger.info(f"User {message.author.id} already has a request being processed, ignoring new request")
+                try:
+                    await message.add_reaction("⏳")  # Hourglass emoji to indicate waiting
+                except Exception as e:
+                    logger.warning(f"Failed to add reaction: {e}")
+                return
+            
+            # Mark user as processing
+            _processing_users.add(message.author.id)
         
-        # Extract text content and download images
-        text_content = await extract_text_from_message(message)
-        
-        # Extract aspect ratio from text content
-        aspect_ratio, text_content = extract_aspect_ratio(text_content)
-        if aspect_ratio:
-            logger.info(f"Aspect ratio detected: {aspect_ratio}")
-        
-        images = []
-        
-        # Download attached images from the mentioning message
-        for attachment in message.attachments:
-            if attachment.content_type and attachment.content_type.startswith('image/'):
-                if attachment.size > config.MAX_IMAGE_SIZE:
-                    await response_message.edit(content=f"Image {attachment.filename} is too large. Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB.")
-                    return
-                
-                image = await download_image(attachment.url)
-                if image:
-                    images.append(image)
-                    logger.info(f"Downloaded image: {attachment.filename}")
-        
-        # If this is a reply message, download images from the original message (ignore text)
-        if message.reference and message.reference.message_id:
-            try:
-                # Fetch the original message being replied to
-                original_message = await message.channel.fetch_message(message.reference.message_id)
-                
-                # Download images from the original message (text is ignored as per issue requirements)
-                for attachment in original_message.attachments:
-                    if attachment.content_type and attachment.content_type.startswith('image/'):
-                        if attachment.size > config.MAX_IMAGE_SIZE:
-                            logger.warning(f"Skipping large image from original message: {attachment.filename}")
-                            continue
-                        
-                        image = await download_image(attachment.url)
-                        if image:
-                            images.append(image)
-                            logger.info(f"Downloaded image from original message: {attachment.filename}")
+        try:
+            # Send immediate response
+            response_message = await message.reply("Generating response...")
+            
+            # Extract text content and download images
+            text_content = await extract_text_from_message(message)
+            
+            # Extract aspect ratio from text content
+            aspect_ratio, text_content = extract_aspect_ratio(text_content)
+            if aspect_ratio:
+                logger.info(f"Aspect ratio detected: {aspect_ratio}")
+            
+            images = []
+            
+            # Download attached images from the mentioning message
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith('image/'):
+                    if attachment.size > config.MAX_IMAGE_SIZE:
+                        await response_message.edit(content=f"Image {attachment.filename} is too large. Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB.")
+                        return
+                    
+                    image = await download_image(attachment.url)
+                    if image:
+                        images.append(image)
+                        logger.info(f"Downloaded image: {attachment.filename}")
+            
+            # If this is a reply message, download images from the original message (ignore text)
+            if message.reference and message.reference.message_id:
+                try:
+                    # Fetch the original message being replied to
+                    original_message = await message.channel.fetch_message(message.reference.message_id)
+                    
+                    # Download images from the original message (text is ignored as per issue requirements)
+                    for attachment in original_message.attachments:
+                        if attachment.content_type and attachment.content_type.startswith('image/'):
+                            if attachment.size > config.MAX_IMAGE_SIZE:
+                                logger.warning(f"Skipping large image from original message: {attachment.filename}")
+                                continue
                             
-            except Exception as e:
-                logger.error(f"Error fetching original message: {e}")
-                # Continue processing even if we can't fetch the original message
+                            image = await download_image(attachment.url)
+                            if image:
+                                images.append(image)
+                                logger.info(f"Downloaded image from original message: {attachment.filename}")
+                                
+                except Exception as e:
+                    logger.error(f"Error fetching original message: {e}")
+                    # Continue processing even if we can't fetch the original message
+            
+            # Process based on inputs
+            await process_generation_request(response_message, text_content, images, message.author, aspect_ratio)
         
-        # Process based on inputs
-        await process_generation_request(response_message, text_content, images, message.author, aspect_ratio)
+        finally:
+            # Always remove user from processing set when done
+            async with _processing_lock:
+                _processing_users.discard(message.author.id)
             
     except Exception as e:
         logger.error(f"Error handling generation request: {e}")
+        # Make sure to remove user from processing set on error
+        async with _processing_lock:
+            _processing_users.discard(message.author.id)
         try:
             # Try to edit the response message if it exists, otherwise reply to original
             if 'response_message' in locals():
@@ -739,89 +766,111 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         if await check_usage_limit_and_respond(interaction):
             return
         
-        # Defer the response since this will take some time
-        await interaction.response.defer()
-        
-        # Get the user's avatar URL
-        user = interaction.user
-        avatar_url = user.display_avatar.url
-        
-        logger.info(f"User {user.id} ({user.name}) requesting avatar transformation with template: {template.value}")
-        
-        # Download the user's avatar
-        avatar_image = await download_image(avatar_url)
-        if not avatar_image:
-            await interaction.followup.send("❌ Failed to download your avatar. Please try again.")
-            return
-        
-        # Get the prompt based on the template
-        template_prompts = {
-            'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject"
-        }
-        
-        prompt = template_prompts.get(template.value, template_prompts['halloween'])
-        
-        # Get user's model preference
-        user_model = usage_tracker.get_user_model_preference(user.id)
-        generator = get_model_generator(user_model)
-        
-        # Generate the transformed avatar
-        generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-            prompt, avatar_image
-        )
-        
-        # Track usage
-        if usage_metadata and not user.bot:
-            try:
-                prompt_tokens = usage_metadata.get("prompt_token_count", 0)
-                output_tokens = usage_metadata.get("candidates_token_count", 0)
-                total_tokens = usage_metadata.get("total_token_count", 0)
-                images_generated = 1 if generated_image else 0
-                
-                usage_tracker.record_usage(
-                    user_id=user.id,
-                    username=user.display_name or user.name,
-                    prompt_tokens=prompt_tokens,
-                    output_tokens=output_tokens,
-                    total_tokens=total_tokens,
-                    images_generated=images_generated
+        # Check if user is already processing a request
+        async with _processing_lock:
+            if interaction.user.id in _processing_users:
+                await interaction.response.send_message(
+                    "⏳ You already have a request being processed. Please wait for it to complete before submitting another request.",
+                    ephemeral=True
                 )
-            except Exception as e:
-                logger.warning(f"Could not track usage: {e}")
+                logger.info(f"User {interaction.user.id} already has a request being processed, blocking /avatar request")
+                return
+            
+            # Mark user as processing
+            _processing_users.add(interaction.user.id)
         
-        # Send the result
-        if generated_image:
-            # Save the image
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"avatar_{template.value}_{timestamp}.png"
+        try:
+            # Defer the response since this will take some time
+            await interaction.response.defer()
             
-            # Save to disk
-            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-            generated_image.save(filepath)
+            # Get the user's avatar URL
+            user = interaction.user
+            avatar_url = user.display_avatar.url
             
-            # Save to buffer for Discord
-            img_buffer = io.BytesIO()
-            generated_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
+            logger.info(f"User {user.id} ({user.name}) requesting avatar transformation with template: {template.value}")
             
-            # Prepare the message
-            content = f"🎃 **{template.name} Avatar Transformation**"
-            if genai_text_response and genai_text_response.strip():
-                content += f"\n\n{genai_text_response}"
+            # Download the user's avatar
+            avatar_image = await download_image(avatar_url)
+            if not avatar_image:
+                await interaction.followup.send("❌ Failed to download your avatar. Please try again.")
+                return
             
-            await interaction.followup.send(
-                content=content,
-                file=discord.File(img_buffer, filename=filename)
+            # Get the prompt based on the template
+            template_prompts = {
+                'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject"
+            }
+            
+            prompt = template_prompts.get(template.value, template_prompts['halloween'])
+            
+            # Get user's model preference
+            user_model = usage_tracker.get_user_model_preference(user.id)
+            generator = get_model_generator(user_model)
+            
+            # Generate the transformed avatar
+            generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
+                prompt, avatar_image
             )
-            logger.info(f"Successfully generated {template.value} avatar for user {user.id}")
-        else:
-            error_msg = "❌ Failed to generate your transformed avatar. Please try again."
-            if genai_text_response and genai_text_response.strip():
-                error_msg += f"\n\n{genai_text_response}"
-            await interaction.followup.send(error_msg)
+            
+            # Track usage
+            if usage_metadata and not user.bot:
+                try:
+                    prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+                    output_tokens = usage_metadata.get("candidates_token_count", 0)
+                    total_tokens = usage_metadata.get("total_token_count", 0)
+                    images_generated = 1 if generated_image else 0
+                    
+                    usage_tracker.record_usage(
+                        user_id=user.id,
+                        username=user.display_name or user.name,
+                        prompt_tokens=prompt_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=total_tokens,
+                        images_generated=images_generated
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not track usage: {e}")
+            
+            # Send the result
+            if generated_image:
+                # Save the image
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"avatar_{template.value}_{timestamp}.png"
+                
+                # Save to disk
+                filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+                generated_image.save(filepath)
+                
+                # Save to buffer for Discord
+                img_buffer = io.BytesIO()
+                generated_image.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                
+                # Prepare the message
+                content = f"🎃 **{template.name} Avatar Transformation**"
+                if genai_text_response and genai_text_response.strip():
+                    content += f"\n\n{genai_text_response}"
+                
+                await interaction.followup.send(
+                    content=content,
+                    file=discord.File(img_buffer, filename=filename)
+                )
+                logger.info(f"Successfully generated {template.value} avatar for user {user.id}")
+            else:
+                error_msg = "❌ Failed to generate your transformed avatar. Please try again."
+                if genai_text_response and genai_text_response.strip():
+                    error_msg += f"\n\n{genai_text_response}"
+                await interaction.followup.send(error_msg)
+        
+        finally:
+            # Always remove user from processing set when done
+            async with _processing_lock:
+                _processing_users.discard(user.id)
             
     except Exception as e:
         logger.error(f"Error in avatar command: {e}")
+        # Make sure to remove user from processing set on error
+        async with _processing_lock:
+            _processing_users.discard(interaction.user.id)
         try:
             await interaction.followup.send(
                 "An error occurred while transforming your avatar. Please try again.",
