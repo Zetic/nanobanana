@@ -295,73 +295,41 @@ async def handle_generation_request(message):
 async def process_generation_request(response_message, text_content: str, images: List, user, aspect_ratio: Optional[str] = None):
     """Process the generation request and edit the response message with the result."""
     try:
-        # Get user's model preference
-        user_model = usage_tracker.get_user_model_preference(user.id)
-        logger.info(f"User {user.id} model preference: {user_model}")
+        # Always use the default Gemini model (nanobanana)
+        generator = get_model_generator("nanobanana")
         
-        # Get the appropriate model generator
-        generator = get_model_generator(user_model)
-        
-        # Generate based on available inputs, rate limit status, and user's model preference
+        # Generate based on available inputs, rate limit status
         generated_image = None
         genai_text_response = None
         usage_metadata = None
         
-        # Create streaming callback for image-generating models that support it (gpt)
-        async def streaming_callback(message_text, partial_image=None):
-            """Update Discord message with streaming progress and partial images."""
-            try:
-                if partial_image:
-                    # Send partial image to Discord instead of just text
-                    # Save partial image to buffer for Discord
-                    img_buffer = io.BytesIO()
-                    partial_image.save(img_buffer, format='PNG')
-                    img_buffer.seek(0)
-                    
-                    # Create Discord file from buffer
-                    import discord
-                    discord_file = discord.File(img_buffer, filename=f"partial_image.png")
-                    
-                    # Update message with partial image
-                    await response_message.edit(content=message_text, attachments=[discord_file])
-                else:
-                    # Fallback to text-only update
-                    await response_message.edit(content=message_text)
-            except Exception as e:
-                logger.warning(f"Failed to update streaming message: {e}")
-                # Fallback to text-only if image fails
-                try:
-                    await response_message.edit(content=message_text)
-                except Exception as e2:
-                    logger.warning(f"Failed to update with text fallback: {e2}")
-        
-        # User can generate images or is using chat model
+        # User can generate images
         if images and text_content.strip():
             # Text + Image(s) case
             if len(images) == 1:
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                    text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
+                    text_content, images[0], None, aspect_ratio
                 )
             else:
                 # For multiple images, pass first as primary and rest as additional
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                    text_content, images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
+                    text_content, images[0], None, aspect_ratio, images[1:]
                 )
         elif images:
             # Image(s) only case - no text provided
             if len(images) == 1:
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                    images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio
+                    images[0], None, aspect_ratio
                 )
             else:
                 # For multiple images, pass first as primary and rest as additional
                 generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                    images[0], streaming_callback if user_model == "gpt" else None, aspect_ratio, images[1:]
+                    images[0], None, aspect_ratio, images[1:]
                 )
         elif text_content.strip():
             # Text only case
             generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
-                text_content, streaming_callback if user_model == "gpt" else None, aspect_ratio
+                text_content, None, aspect_ratio
             )
         else:
             # No content provided
@@ -369,7 +337,6 @@ async def process_generation_request(response_message, text_content: str, images
             return
         
         # Track usage if we have metadata and a user
-        send_limit_warning = False
         if usage_metadata and user and not user.bot:  # Don't track bot usage
             try:
                 prompt_tokens = usage_metadata.get("prompt_token_count", 0)
@@ -385,13 +352,6 @@ async def process_generation_request(response_message, text_content: str, images
                     total_tokens=total_tokens,
                     images_generated=images_generated
                 )
-                
-                # Check if this usage filled all slots (and they're not elevated)
-                available_after = usage_tracker._get_available_usage_slots(user.id)
-                if (images_generated > 0 and 
-                    not usage_tracker.is_elevated_user(user.id) and
-                    available_after == 0):
-                    send_limit_warning = True
                     
             except Exception as e:
                 logger.warning(f"Could not track usage: {e}")
@@ -440,26 +400,6 @@ async def process_generation_request(response_message, text_content: str, images
                 await response_message.edit(content=None, attachments=files)
         else:
             await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
-        
-        # Send warning message if user just hit their limit
-        if send_limit_warning:
-            try:
-                # Get next available time
-                next_available = usage_tracker._get_next_available_time(user.id)
-                
-                if next_available:
-                    next_timestamp = int(next_available.timestamp())
-                    warning_msg = (f"⚠️ You've used both of your image generation slots. "
-                                 f"Your next slot will be available <t:{next_timestamp}:R>.")
-                else:
-                    warning_msg = (f"⚠️ You've used both of your image generation slots. "
-                                 f"Each slot resets 8 hours after use.")
-                
-                # Send as a message that auto-deletes
-                if hasattr(response_message, 'channel'):
-                    await response_message.channel.send(warning_msg, delete_after=30)
-            except Exception as e:
-                logger.warning(f"Could not send limit warning: {e}")
             
     except Exception as e:
         logger.error(f"Error processing generation request: {e}")
@@ -521,7 +461,6 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 **Slash Commands:**
 • `/help` - Show this help message
 • `/avatar` - Transform your avatar with themed templates (Halloween, etc.)
-• `/model` - Switch between AI models (nanobanana, GPT-5, or chat)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)"""
@@ -761,9 +700,8 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         
         prompt = template_prompts.get(template.value, template_prompts['halloween'])
         
-        # Get user's model preference
-        user_model = usage_tracker.get_user_model_preference(user.id)
-        generator = get_model_generator(user_model)
+        # Always use the default Gemini model
+        generator = get_model_generator("nanobanana")
         
         # Generate the transformed avatar
         generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
@@ -832,83 +770,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
             pass
 
 
-@bot.tree.command(name='model', description='Switch between AI models for your generations')
-@app_commands.describe(model='The AI model to use for your generations (leave empty to see current model)')
-@app_commands.choices(model=[
-    app_commands.Choice(name='Nanobanana (Gemini - Default)', value='nanobanana'),
-    app_commands.Choice(name='GPT-5 (OpenAI Image Generation)', value='gpt'),
-    app_commands.Choice(name='Chat (Text-Only Responses)', value='chat')
-])
-async def model_slash(interaction: discord.Interaction, model: app_commands.Choice[str] = None):
-    """Switch between AI models for your generations."""
-    try:
-        # Check if interaction is from a DM channel and user is not elevated
-        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
-                ephemeral=True
-            )
-            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /model in DM channel")
-            return
-        
-        # Check usage limit
-        if await check_usage_limit_and_respond(interaction):
-            return
-        
-        username = interaction.user.display_name or interaction.user.name
-        current_model = usage_tracker.get_user_model_preference(interaction.user.id)
-        
-        if model is None:
-            # Show current model preference
-            model_descriptions = {
-                'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
-                'gpt': 'GPT-5 - Advanced image generation using OpenAI\'s latest model', 
-                'chat': 'Chat - Text-only responses without image generation'
-            }
-            
-            current_description = model_descriptions.get(current_model, current_model)
-            await interaction.response.send_message(
-                f"**Your current AI model:**\n\n"
-                f"🤖 **{current_model.title()}**\n"
-                f"📝 {current_description}\n\n"
-                f"To change your model, use `/model` and select a different option.",
-                ephemeral=True
-            )
-        else:
-            # Set new model preference
-            model_value = model.value
-            success = usage_tracker.set_user_model_preference(interaction.user.id, username, model_value)
-            
-            if success:
-                model_descriptions = {
-                    'nanobanana': 'Nanobanana (Gemini) - Image generation and transformation using Google\'s Gemini AI',
-                    'gpt': 'GPT-5 - Advanced image generation using OpenAI\'s latest model',
-                    'chat': 'Chat - Text-only responses without image generation'
-                }
-                
-                description = model_descriptions.get(model_value, model_value)
-                await interaction.response.send_message(
-                    f"✅ **Model preference updated!**\n\n"
-                    f"Previous model: **{current_model.title()}**\n"
-                    f"New model: **{model.name}**\n"
-                    f"Description: {description}\n\n"
-                    f"All your future generations will now use this model until you change it again.",
-                    ephemeral=True
-                )
-                logger.info(f"User {username} ({interaction.user.id}) changed model preference from {current_model} to: {model_value}")
-            else:
-                await interaction.response.send_message(
-                    "❌ **Error updating model preference**\n\n"
-                    "There was an issue saving your model preference. Please try again.",
-                    ephemeral=True
-                )
-            
-    except Exception as e:
-        logger.error(f"Error in model command: {e}")
-        await interaction.response.send_message(
-            "An error occurred while updating your model preference. Please try again.",
-            ephemeral=True
-        )
+
 
 
 
