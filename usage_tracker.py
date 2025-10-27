@@ -36,7 +36,7 @@ class UsageTracker:
         Each slot expires 8 hours after it was used.
         
         Returns:
-            Number of available slots (0, 1, or 2)
+            Number of available slots (0, 1, 2, or 3)
         """
         with self._lock:
             data = self._load_usage_data()
@@ -252,7 +252,7 @@ class UsageTracker:
     
     def has_reached_usage_limit(self, user_id: int) -> Tuple[bool, Optional[datetime]]:
         """
-        Check if a user has reached their usage limit (both slots are full).
+        Check if a user has reached their usage limit (all slots are full).
         
         Returns:
             Tuple of (has_reached_limit, next_available_time)
