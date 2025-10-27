@@ -864,7 +864,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         finally:
             # Always remove user from processing set when done
             async with _processing_lock:
-                _processing_users.discard(user.id)
+                _processing_users.discard(interaction.user.id)
             
     except Exception as e:
         logger.error(f"Error in avatar command: {e}")
