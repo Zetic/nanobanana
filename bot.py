@@ -303,34 +303,6 @@ async def process_generation_request(response_message, text_content: str, images
         genai_text_response = None
         usage_metadata = None
         
-        # Create streaming callback for image-generating models that support it (gpt)
-        async def streaming_callback(message_text, partial_image=None):
-            """Update Discord message with streaming progress and partial images."""
-            try:
-                if partial_image:
-                    # Send partial image to Discord instead of just text
-                    # Save partial image to buffer for Discord
-                    img_buffer = io.BytesIO()
-                    partial_image.save(img_buffer, format='PNG')
-                    img_buffer.seek(0)
-                    
-                    # Create Discord file from buffer
-                    import discord
-                    discord_file = discord.File(img_buffer, filename=f"partial_image.png")
-                    
-                    # Update message with partial image
-                    await response_message.edit(content=message_text, attachments=[discord_file])
-                else:
-                    # Fallback to text-only update
-                    await response_message.edit(content=message_text)
-            except Exception as e:
-                logger.warning(f"Failed to update streaming message: {e}")
-                # Fallback to text-only if image fails
-                try:
-                    await response_message.edit(content=message_text)
-                except Exception as e2:
-                    logger.warning(f"Failed to update with text fallback: {e2}")
-        
         # User can generate images
         if images and text_content.strip():
             # Text + Image(s) case
