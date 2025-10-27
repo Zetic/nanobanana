@@ -386,7 +386,7 @@ async def process_generation_request(response_message, text_content: str, images
                     images_generated=images_generated
                 )
                 
-                # Check if this usage filled both slots (and they're not elevated)
+                # Check if this usage filled all slots (and they're not elevated)
                 available_after = usage_tracker._get_available_usage_slots(user.id)
                 if (images_generated > 0 and 
                     not usage_tracker.is_elevated_user(user.id) and
