@@ -137,6 +137,10 @@ async def on_message_delete(message):
             content = content.replace(f'<@{bot.user.id}>', '').replace(f'<@!{bot.user.id}>', '')
             content = content.strip()
             
+            # If content is empty after removing mentions, use a generic message
+            if not content:
+                content = "use me"
+            
             # Construct the snitching message
             snitch_message = f"Oh {user.mention} I thought your idea to {content} was interesting though..."
             
