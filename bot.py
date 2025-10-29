@@ -32,6 +32,7 @@ bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_c
 # Bot snitching feature - track messages that mention the bot
 # Structure: {message_id: {'content': str, 'author_id': int, 'channel_id': int, 'timestamp': datetime}}
 tracked_messages: Dict[int, Dict[str, Any]] = {}
+DEFAULT_SNITCH_CONTENT = "use me"  # Fallback text when message only contained bot mention
 
 def cleanup_old_tracked_messages():
     """Remove tracked messages older than 8 hours."""
@@ -139,7 +140,7 @@ async def on_message_delete(message):
             
             # If content is empty after removing mentions, use a generic message
             if not content:
-                content = "use me"
+                content = DEFAULT_SNITCH_CONTENT
             
             # Construct the snitching message
             snitch_message = f"Oh {user.mention} I thought your idea to {content} was interesting though..."
