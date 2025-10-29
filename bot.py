@@ -29,6 +29,26 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
 
+# Bot snitching feature - track messages that mention the bot
+# Structure: {message_id: {'content': str, 'author_id': int, 'channel_id': int, 'timestamp': datetime}}
+tracked_messages: Dict[int, Dict[str, Any]] = {}
+DEFAULT_SNITCH_CONTENT = "use me"  # Fallback text when message only contained bot mention
+
+def cleanup_old_tracked_messages():
+    """Remove tracked messages older than 8 hours."""
+    current_time = datetime.now()
+    expired_ids = []
+    
+    for message_id, data in tracked_messages.items():
+        if current_time - data['timestamp'] > timedelta(hours=8):
+            expired_ids.append(message_id)
+    
+    for message_id in expired_ids:
+        del tracked_messages[message_id]
+    
+    if expired_ids:
+        logger.info(f"Cleaned up {len(expired_ids)} expired tracked messages")
+
 @bot.event
 async def on_ready():
     """Called when the bot is ready."""
@@ -55,6 +75,20 @@ async def on_message(message):
         logger.info(f"Blocked non-elevated user {message.author.id} from using bot in DM channel")
         return
     
+    # Track messages that mention the bot for snitching feature
+    if is_directly_mentioned(message.content, bot.user.id):
+        # Clean up old tracked messages before adding new one
+        cleanup_old_tracked_messages()
+        
+        # Track this message
+        tracked_messages[message.id] = {
+            'content': message.content,
+            'author_id': message.author.id,
+            'channel_id': message.channel.id,
+            'timestamp': datetime.now()
+        }
+        logger.info(f"Tracking message {message.id} from user {message.author.id} in channel {message.channel.id}")
+    
     # Check if user has reached usage limit (only for non-elevated users)
     if not usage_tracker.is_elevated_user(message.author.id):
         has_limit, next_available = usage_tracker.has_reached_usage_limit(message.author.id)
@@ -78,6 +112,48 @@ async def on_message(message):
     # Check if bot is directly mentioned in the message content (not just in a reply)
     if is_directly_mentioned(message.content, bot.user.id):
         await handle_generation_request(message)
+
+@bot.event
+async def on_message_delete(message):
+    """Handle deleted messages - snitch on users who delete messages that mentioned the bot."""
+    # Check if this message was tracked
+    if message.id in tracked_messages:
+        tracked_data = tracked_messages[message.id]
+        
+        try:
+            # Get the channel where the message was deleted
+            channel = bot.get_channel(tracked_data['channel_id'])
+            if not channel:
+                logger.warning(f"Could not find channel {tracked_data['channel_id']} for snitching")
+                return
+            
+            # Get the user who sent (and deleted) the message
+            user = await bot.fetch_user(tracked_data['author_id'])
+            if not user:
+                logger.warning(f"Could not find user {tracked_data['author_id']} for snitching")
+                return
+            
+            # Remove bot mentions from the original content
+            content = tracked_data['content']
+            content = content.replace(f'<@{bot.user.id}>', '').replace(f'<@!{bot.user.id}>', '')
+            content = content.strip()
+            
+            # If content is empty after removing mentions, use a generic message
+            if not content:
+                content = DEFAULT_SNITCH_CONTENT
+            
+            # Construct the snitching message
+            snitch_message = f"Oh {user.mention} I thought your idea to {content} was interesting though..."
+            
+            # Send the snitching message
+            await channel.send(snitch_message)
+            logger.info(f"Snitched on user {user.id} for deleting message {message.id}")
+            
+        except Exception as e:
+            logger.error(f"Error snitching on deleted message {message.id}: {e}")
+        finally:
+            # Remove the tracked message
+            del tracked_messages[message.id]
 
 def is_directly_mentioned(message_content, bot_user_id):
     """

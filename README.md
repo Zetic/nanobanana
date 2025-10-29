@@ -10,6 +10,7 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
 - **Meme Generation**: Generate nonsensical memes using OpenAI
 - **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply (text from original message is ignored)
+- **Bot Snitching**: Catches users who delete messages that mentioned the bot (within 8 hours) and playfully calls them out
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
 - **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
@@ -130,6 +131,24 @@ The bot automatically tracks token usage for each Discord user:
 - Elevated users have unlimited image generation
 
 Use `/usage` to view condensed statistics showing total tokens and images for all users (elevated users only). The output is sent as text messages and automatically split if needed for large user lists. Data is stored locally in JSON format with thread-safe operations for concurrent access.
+
+### Bot Snitching
+
+The bot has a playful "snitching" feature that tracks messages mentioning the bot and calls out users who delete them:
+
+**How it works:**
+- When you mention the bot in a message, the bot tracks that message for **8 hours**
+- If you delete the message within those 8 hours, the bot will send a message in the same channel calling you out
+- The snitching message format: *"Oh @user I thought your idea to [your original text] was interesting though..."*
+- The bot mention is removed from the quoted text for readability
+- Messages older than 8 hours are automatically removed from tracking
+
+**Example:**
+1. User posts: `@Nano Banana create a dancing banana`
+2. User deletes the message
+3. Bot responds: *"Oh @User I thought your idea to create a dancing banana was interesting though..."*
+
+This feature encourages users to own their creative (or silly) prompts! 😄
 
 ### Logging
 
