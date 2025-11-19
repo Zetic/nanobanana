@@ -112,25 +112,56 @@ When you mention the bot in a reply to another message, it will automatically in
 - `/usage` - Show token usage statistics (elevated users only)
 - `/log` - Get the most recent log file (elevated users only)
 - `/reset` - Reset cycle image usage for a user (elevated users only)
+- `/tier` - Assign a tier to a user (elevated users only)
 - `/meme` - Generate a nonsensical meme using OpenAI
 
 **Note:** Elevated users are configured via the `ELEVATED_USERS` environment variable (comma-separated Discord user IDs).
 
-### Usage Tracking
+### Usage Tracking & Tier System
 
 The bot automatically tracks token usage for each Discord user:
 - **Total tokens**: Combined input and output tokens
-- **Images generated**: Number of images created (limited to 3 with independent 8-hour timers)
+- **Images generated**: Number of images created (limited based on user tier)
+- **User tier**: Rate limit tier assigned to the user
+
+**User Tiers:**
+
+The bot supports a flexible tier system for rate limiting:
+
+- **Standard** (default): 3 cycling charges
+- **Limited**: 2 cycling charges  
+- **Strict**: 1 cycling charge
+- **Extra**: 5 cycling charges
+- **Unlimited**: No rate limits (never rate limited)
 
 **Image Generation Limits:**
-- Users can generate up to **3 images**, each with its own independent 8-hour timer
+- Each user has a certain number of usage charges based on their tier (default: standard with 3 charges)
+- Each usage charge has its own independent 8-hour timer
 - Each usage charge expires 8 hours after it was used (based on server time when the image was generated)
 - **You can still generate images as long as at least one slot is available**
 - Rate limiting only occurs when all usage slots are full (no slots available)
 - Timer Example: If you generate images at 2:00 PM, 3:00 PM, and 4:00 PM, the first slot becomes available 8 hours later at 10:00 PM, the second slot at 11:00 PM, and the third slot at 12:00 AM
-- Elevated users have unlimited image generation
+- Elevated users have unlimited image generation regardless of tier
+- Unlimited tier users are never rate limited
 
-Use `/usage` to view condensed statistics showing total tokens and images for all users (elevated users only). The output is sent as text messages and automatically split if needed for large user lists. Data is stored locally in JSON format with thread-safe operations for concurrent access.
+**Managing User Tiers:**
+
+Elevated users can assign tiers using the `/tier` command:
+```
+/tier @user standard    # Set user to standard tier (3 charges)
+/tier @user limited     # Set user to limited tier (2 charges)
+/tier @user strict      # Set user to strict tier (1 charge)
+/tier @user extra       # Set user to extra tier (5 charges)
+/tier @user unlimited   # Set user to unlimited tier (never rate limited)
+```
+
+Example:
+```
+/tier @Zetic extra
+```
+This sets Zetic to the extra tier with 5 cycling charges.
+
+Use `/usage` to view condensed statistics showing total tokens, images, and tier for all users (elevated users only). The output is sent as text messages and automatically split if needed for large user lists. Data is stored locally in JSON format with thread-safe operations for concurrent access.
 
 ### Bot Snitching
 
