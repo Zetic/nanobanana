@@ -8,6 +8,15 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Tier definitions with their corresponding charge limits
+TIER_LIMITS = {
+    'standard': 3,
+    'limited': 2,
+    'strict': 1,
+    'extra': 5,
+    'unlimited': float('inf')
+}
+
 class UsageTracker:
     """Tracks token usage per Discord user with thread-safe JSON operations."""
     
@@ -36,14 +45,18 @@ class UsageTracker:
         Each slot expires 8 hours after it was used.
         
         Returns:
-            Number of available slots (0, 1, 2, or 3)
+            Number of available slots based on user's tier
         """
         with self._lock:
             data = self._load_usage_data()
             user_id_str = str(user_id)
             
+            # Get user's tier limit
+            user_tier = self.get_user_tier(user_id)
+            tier_limit = TIER_LIMITS.get(user_tier, config.DAILY_IMAGE_LIMIT)
+            
             if user_id_str not in data["users"]:
-                return config.DAILY_IMAGE_LIMIT  # All slots available for new users
+                return tier_limit  # All slots available for new users
             
             user_data = data["users"][user_id_str]
             usage_timestamps = user_data.get("usage_timestamps", [])
@@ -58,7 +71,7 @@ class UsageTracker:
             ]
             
             # Return number of available slots
-            return config.DAILY_IMAGE_LIMIT - len(active_usages)
+            return tier_limit - len(active_usages)
     
     def _get_next_available_time(self, user_id: int) -> Optional[datetime]:
         """
@@ -89,7 +102,11 @@ class UsageTracker:
                 if datetime.fromisoformat(ts) > cutoff_time
             ]
             
-            if len(active_usages) < config.DAILY_IMAGE_LIMIT:
+            # Get user's tier limit
+            user_tier = self.get_user_tier(user_id)
+            tier_limit = TIER_LIMITS.get(user_tier, config.DAILY_IMAGE_LIMIT)
+            
+            if len(active_usages) < tier_limit:
                 return None  # At least one slot is available
             
             # Find the oldest active usage and calculate when it expires
@@ -260,6 +277,11 @@ class UsageTracker:
         if user_id in config.ELEVATED_USERS:
             return False, None
         
+        # Unlimited tier users never reach usage limit
+        user_tier = self.get_user_tier(user_id)
+        if user_tier == 'unlimited':
+            return False, None
+        
         available_slots = self._get_available_usage_slots(user_id)
         
         if available_slots > 0:
@@ -274,6 +296,11 @@ class UsageTracker:
         if user_id in config.ELEVATED_USERS:
             return True
         
+        # Unlimited tier users can always generate
+        user_tier = self.get_user_tier(user_id)
+        if user_tier == 'unlimited':
+            return True
+        
         available_slots = self._get_available_usage_slots(user_id)
         return available_slots > 0
     
@@ -281,6 +308,11 @@ class UsageTracker:
         """Get the number of available usage slots for a user."""
         # Elevated users have unlimited images
         if user_id in config.ELEVATED_USERS:
+            return float('inf')
+        
+        # Unlimited tier users have unlimited images
+        user_tier = self.get_user_tier(user_id)
+        if user_tier == 'unlimited':
             return float('inf')
         
         return self._get_available_usage_slots(user_id)
@@ -304,6 +336,63 @@ class UsageTracker:
             
             self._save_usage_data(data)
             logger.info(f"Reset usage timestamps for user {user_id}")
+            return True
+    
+    def get_user_tier(self, user_id: int) -> str:
+        """
+        Get the tier for a user.
+        Returns 'standard' if not set.
+        """
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            if user_id_str not in data["users"]:
+                return 'standard'
+            
+            return data["users"][user_id_str].get("tier", 'standard')
+    
+    def set_user_tier(self, user_id: int, tier: str, username: str = None) -> bool:
+        """
+        Set the tier for a user.
+        
+        Args:
+            user_id: Discord user ID
+            tier: Tier name (standard, limited, strict, extra, unlimited)
+            username: Optional username to store
+        
+        Returns:
+            True if successful, False if tier is invalid
+        """
+        if tier not in TIER_LIMITS:
+            return False
+        
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            # Create user entry if it doesn't exist
+            if user_id_str not in data["users"]:
+                data["users"][user_id_str] = {
+                    "username": username or "Unknown User",
+                    "total_prompt_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_tokens": 0,
+                    "images_generated": 0,
+                    "requests_count": 0,
+                    "first_use": datetime.now().isoformat(),
+                    "last_use": datetime.now().isoformat(),
+                    "usage_timestamps": [],
+                    "tier": tier
+                }
+            else:
+                # Update existing user's tier
+                data["users"][user_id_str]["tier"] = tier
+                if username:
+                    data["users"][user_id_str]["username"] = username
+            
+            self._save_usage_data(data)
+            logger.info(f"Set tier '{tier}' for user {user_id}")
             return True
     
     def is_elevated_user(self, user_id: int) -> bool:
