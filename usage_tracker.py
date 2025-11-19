@@ -39,6 +39,23 @@ class UsageTracker:
                     with open(self.usage_file, 'w') as f:
                         json.dump(initial_data, f, indent=2)
     
+    def _get_user_tier_unlocked(self, user_id: int, data: Dict[str, Any]) -> str:
+        """
+        Internal method to get user tier without acquiring lock.
+        Must be called from within a locked context with data already loaded.
+        
+        Args:
+            user_id: Discord user ID
+            data: Already loaded usage data
+        
+        Returns:
+            Tier name (default: 'standard')
+        """
+        user_id_str = str(user_id)
+        if user_id_str not in data["users"]:
+            return 'standard'
+        return data["users"][user_id_str].get("tier", 'standard')
+    
     def _get_available_usage_slots(self, user_id: int) -> int:
         """
         Get the number of available usage slots for a user.
@@ -51,8 +68,8 @@ class UsageTracker:
             data = self._load_usage_data()
             user_id_str = str(user_id)
             
-            # Get user's tier limit
-            user_tier = self.get_user_tier(user_id)
+            # Get user's tier limit (using unlocked version since we're already in a lock)
+            user_tier = self._get_user_tier_unlocked(user_id, data)
             tier_limit = TIER_LIMITS.get(user_tier, config.DAILY_IMAGE_LIMIT)
             
             if user_id_str not in data["users"]:
@@ -102,8 +119,8 @@ class UsageTracker:
                 if datetime.fromisoformat(ts) > cutoff_time
             ]
             
-            # Get user's tier limit
-            user_tier = self.get_user_tier(user_id)
+            # Get user's tier limit (using unlocked version since we're already in a lock)
+            user_tier = self._get_user_tier_unlocked(user_id, data)
             tier_limit = TIER_LIMITS.get(user_tier, config.DAILY_IMAGE_LIMIT)
             
             if len(active_usages) < tier_limit:
