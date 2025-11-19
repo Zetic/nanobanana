@@ -539,7 +539,8 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 • `/avatar` - Transform your avatar with themed templates (Halloween, etc.)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
-• `/reset` - Reset cycle image usage for a user (elevated users only)"""
+• `/reset` - Reset cycle image usage for a user (elevated users only)
+• `/tier` - Assign a tier to a user (elevated users only)"""
     
     await interaction.response.send_message(help_text)
 
@@ -587,11 +588,21 @@ async def usage_slash(interaction: discord.Interaction):
             total_tokens = user_data.get('total_tokens', 0)
             images = user_data.get('images_generated', 0)
             
-            # Get active usage count for this user (within 8-hour window)
-            active_count = usage_tracker.get_daily_image_count(int(user_id))
-            usage_rate = f"{active_count}/{config.DAILY_IMAGE_LIMIT}"
+            # Get active usage count and tier for this user
+            user_id_int = int(user_id)
+            active_count = usage_tracker.get_daily_image_count(user_id_int)
+            user_tier = usage_tracker.get_user_tier(user_id_int)
             
-            usage_text += f"{i}. {username}: {total_tokens:,} tokens, {images} images, {usage_rate} active\n"
+            # Get tier limit for display
+            from usage_tracker import TIER_LIMITS
+            tier_limit = TIER_LIMITS.get(user_tier, config.DAILY_IMAGE_LIMIT)
+            
+            if user_tier == 'unlimited' or tier_limit == float('inf'):
+                usage_rate = f"{active_count}/∞"
+            else:
+                usage_rate = f"{active_count}/{int(tier_limit)}"
+            
+            usage_text += f"{i}. {username} ({user_tier}): {total_tokens:,} tokens, {images} images, {usage_rate} active\n"
         
         # Split message into chunks if needed and send
         chunks = split_long_message(usage_text)
@@ -729,6 +740,71 @@ async def reset_slash(interaction: discord.Interaction, user: discord.User):
         logger.error(f"Error in reset command: {e}")
         await interaction.response.send_message(
             "An error occurred while resetting user usage. Please try again.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name='tier', description='Assign a tier to a user (elevated users only)')
+@app_commands.describe(
+    user='The Discord user to assign a tier to',
+    tier='The tier to assign (standard, limited, strict, extra, unlimited)'
+)
+@app_commands.choices(tier=[
+    app_commands.Choice(name='Standard (3 charges)', value='standard'),
+    app_commands.Choice(name='Limited (2 charges)', value='limited'),
+    app_commands.Choice(name='Strict (1 charge)', value='strict'),
+    app_commands.Choice(name='Extra (5 charges)', value='extra'),
+    app_commands.Choice(name='Unlimited', value='unlimited')
+])
+async def tier_slash(interaction: discord.Interaction, user: discord.User, tier: app_commands.Choice[str]):
+    """Assign a tier to a user (elevated users only)."""
+    try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /tier in DM channel")
+            return
+        
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command. Only elevated users can assign tiers.",
+                ephemeral=True
+            )
+            return
+        
+        # Set the tier for the user
+        username = user.display_name or user.name
+        success = usage_tracker.set_user_tier(user.id, tier.value, username)
+        
+        if success:
+            # Get tier details for display
+            from usage_tracker import TIER_LIMITS
+            tier_limit = TIER_LIMITS.get(tier.value, 3)
+            
+            if tier.value == 'unlimited':
+                limit_text = "unlimited charges (never rate limited)"
+            else:
+                limit_text = f"{int(tier_limit)} cycling charges"
+            
+            await interaction.response.send_message(
+                f"✅ Successfully set **{username}** (ID: {user.id}) to **{tier.value}** tier with {limit_text}.",
+                ephemeral=True
+            )
+            logger.info(f"Elevated user {interaction.user.id} set tier '{tier.value}' for user {user.id}")
+        else:
+            await interaction.response.send_message(
+                f"❌ Failed to set tier. Invalid tier value.",
+                ephemeral=True
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in tier command: {e}")
+        await interaction.response.send_message(
+            "An error occurred while setting user tier. Please try again.",
             ephemeral=True
         )
 
