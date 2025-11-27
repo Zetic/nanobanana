@@ -540,8 +540,12 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
             voice_session: The VoiceSession instance to send audio to
         """
         self._voice_session = voice_session
-        self._resampler = AudioResampler()
         self._loop = asyncio.get_event_loop()
+        # Audio buffer for batching chunks to reduce cross-thread calls
+        self._audio_buffer = bytearray()
+        self._buffer_lock = asyncio.Lock()
+        # Buffer threshold: ~100ms of audio at 24kHz mono (2400 samples * 2 bytes)
+        self._buffer_threshold = 4800
         
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
@@ -567,20 +571,39 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
             
             if pcm_data:
                 # Resample from Discord format (48kHz stereo) to OpenAI format (24kHz mono)
-                resampled_audio = self._resampler.resample_48k_stereo_to_24k_mono(pcm_data)
+                # Using the static method directly for efficiency
+                resampled_audio = AudioResampler.resample_48k_stereo_to_24k_mono(pcm_data)
                 
                 if resampled_audio:
-                    # Schedule the async send_audio call in the event loop
-                    asyncio.run_coroutine_threadsafe(
-                        self._voice_session.openai_session.send_audio(resampled_audio),
-                        self._loop
-                    )
+                    # Add to buffer
+                    self._audio_buffer.extend(resampled_audio)
+                    
+                    # Send when buffer reaches threshold to reduce cross-thread calls
+                    if len(self._audio_buffer) >= self._buffer_threshold:
+                        audio_to_send = bytes(self._audio_buffer)
+                        self._audio_buffer.clear()
+                        
+                        # Schedule the async send_audio call in the event loop
+                        asyncio.run_coroutine_threadsafe(
+                            self._voice_session.openai_session.send_audio(audio_to_send),
+                            self._loop
+                        )
         except Exception as e:
             logger.error(f"Error processing voice data from {user}: {e}")
     
     def cleanup(self):
-        """Clean up the audio sink."""
-        pass
+        """Clean up the audio sink and flush any remaining audio."""
+        # Flush any remaining buffered audio
+        if self._audio_buffer and self._voice_session.openai_session:
+            try:
+                audio_to_send = bytes(self._audio_buffer)
+                self._audio_buffer.clear()
+                asyncio.run_coroutine_threadsafe(
+                    self._voice_session.openai_session.send_audio(audio_to_send),
+                    self._loop
+                )
+            except Exception as e:
+                logger.warning(f"Error flushing audio buffer during cleanup: {e}")
 
 
 
@@ -598,7 +621,6 @@ class VoiceSession:
         self._audio_source: Optional[StreamingAudioSource] = None
         self._audio_sink: Optional['OpenAIVoiceSink'] = None
         self._listen_task: Optional[asyncio.Task] = None
-        self._resampler = AudioResampler()
         
     @property
     def guild_id(self) -> int:
@@ -658,8 +680,8 @@ class VoiceSession:
         Args:
             audio_data: Raw PCM audio (24kHz, 16-bit, mono)
         """
-        # Resample to Discord format (48kHz stereo)
-        discord_audio = self._resampler.resample_24k_mono_to_48k_stereo(audio_data)
+        # Resample to Discord format (48kHz stereo) using static method
+        discord_audio = AudioResampler.resample_24k_mono_to_48k_stereo(audio_data)
         
         # Add to playback queue
         if self._audio_source:
