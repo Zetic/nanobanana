@@ -39,6 +39,11 @@ from model_interface import get_model_generator
 
 logger = logging.getLogger(__name__)
 
+# Debug logging constants (defined early so classes can reference them)
+DEBUG_LOG_AUDIO_CHUNK_INTERVAL = 50  # Log audio stats every N chunks (avoids log spam)
+DEBUG_LOG_PROMPT_TRUNCATE_LENGTH = 50  # Maximum characters to show in prompt logs
+DEBUG_HEARTBEAT_INTERVAL_LOOPS = 3000  # Heartbeat log every N loops (3000 * 0.1s = 5 minutes)
+
 
 class VoiceDebugTimer:
     """
@@ -103,7 +108,7 @@ class VoiceSessionStats:
         self.audio_chunks_sent += 1
         self.audio_bytes_sent += byte_count
         self.last_audio_sent_time = time.perf_counter()
-        if self.audio_chunks_sent % 50 == 0:  # Log every 50 chunks to avoid spam
+        if self.audio_chunks_sent % DEBUG_LOG_AUDIO_CHUNK_INTERVAL == 0:
             logger.debug(f"[STATS] Audio sent: {self.audio_chunks_sent} chunks, {self.audio_bytes_sent} bytes total")
     
     def record_audio_received(self, byte_count: int):
@@ -111,7 +116,7 @@ class VoiceSessionStats:
         self.audio_chunks_received += 1
         self.audio_bytes_received += byte_count
         self.last_audio_received_time = time.perf_counter()
-        if self.audio_chunks_received % 50 == 0:  # Log every 50 chunks to avoid spam
+        if self.audio_chunks_received % DEBUG_LOG_AUDIO_CHUNK_INTERVAL == 0:
             logger.debug(f"[STATS] Audio received: {self.audio_chunks_received} chunks, {self.audio_bytes_received} bytes total")
     
     def record_speech_start(self):
@@ -608,7 +613,7 @@ class OpenAIRealtimeSession:
             timer.checkpoint("Model generator obtained")
             
             # Generate the image
-            logger.debug(f"[DEBUG] Starting image generation for prompt: {prompt[:100]}...")
+            logger.debug(f"[DEBUG] Starting image generation for prompt: {prompt[:DEBUG_LOG_PROMPT_TRUNCATE_LENGTH]}...")
             generated_image, text_response, usage_metadata = await generator.generate_image_from_text(prompt)
             timer.checkpoint("Image generation API call complete")
             
@@ -1049,7 +1054,7 @@ class VoiceSession:
             image: The generated PIL Image
             prompt: The prompt used to generate the image
         """
-        logger.debug(f"[DEBUG] Image generated callback triggered for prompt: {prompt[:50]}...")
+        logger.debug(f"[DEBUG] Image generated callback triggered for prompt: {prompt[:DEBUG_LOG_PROMPT_TRUNCATE_LENGTH]}...")
         if image and self.text_channel:
             # Queue the image for sending (will be processed in the event loop)
             self._pending_images.append((image, prompt))
@@ -1076,7 +1081,7 @@ class VoiceSession:
                     content=f"🎨 **Voice-generated image**\n*Prompt: {prompt}*",
                     file=discord.File(img_buffer, filename=filename)
                 )
-                logger.info(f"📤 Sent generated image to text channel: {prompt[:50]}...")
+                logger.info(f"📤 Sent generated image to text channel: {prompt[:DEBUG_LOG_PROMPT_TRUNCATE_LENGTH]}...")
                 
             except Exception as e:
                 logger.error(f"Error sending generated image to channel: {e}")
@@ -1108,8 +1113,8 @@ class VoiceSession:
                 while self._running:
                     await asyncio.sleep(0.1)
                     loop_count += 1
-                    # Log periodic heartbeat every 5 minutes (3000 * 0.1s = 300s = 5min)
-                    if loop_count % 3000 == 0:
+                    # Log periodic heartbeat
+                    if loop_count % DEBUG_HEARTBEAT_INTERVAL_LOOPS == 0:
                         logger.debug(f"[DEBUG] Voice session heartbeat - running for {loop_count * 0.1:.0f}s")
                     
             else:
