@@ -4,6 +4,7 @@ This module handles:
 - Voice channel connection management
 - Audio streaming to/from OpenAI Realtime API via WebSocket
 - Audio playback using FFmpeg
+- Voice input capture using discord-ext-voice-recv
 """
 
 import asyncio
@@ -19,6 +20,13 @@ import discord
 from discord import VoiceClient
 import websockets
 from websockets.protocol import State as WebSocketState
+
+# Import voice receive extension
+try:
+    from discord.ext import voice_recv
+    VOICE_RECV_AVAILABLE = True
+except ImportError:
+    VOICE_RECV_AVAILABLE = False
 
 import config
 
@@ -401,7 +409,15 @@ class VoiceConnectionManager:
         try:
             # Connect to voice channel
             logger.info(f"🎙️ Connecting to voice channel '{voice_channel.name}' (ID: {voice_channel.id}) in guild {guild_id}")
-            voice_client = await voice_channel.connect()
+            
+            # Use VoiceRecvClient if available for voice input support
+            if VOICE_RECV_AVAILABLE:
+                logger.info("📥 Voice receive extension available - enabling voice input")
+                voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+            else:
+                logger.warning("⚠️ Voice receive extension not available - voice input disabled")
+                voice_client = await voice_channel.connect()
+            
             logger.info(f"✅ Successfully connected to Discord voice channel '{voice_channel.name}'")
             
             # Create voice session
@@ -510,6 +526,87 @@ class StreamingAudioSource(discord.AudioSource):
         self._chunk_position = 0
 
 
+class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
+    """
+    Audio sink that receives voice data from Discord and streams it to OpenAI.
+    Implements the discord-ext-voice-recv AudioSink interface.
+    """
+    
+    def __init__(self, voice_session: 'VoiceSession'):
+        """
+        Initialize the OpenAI voice sink.
+        
+        Args:
+            voice_session: The VoiceSession instance to send audio to
+        """
+        self._voice_session = voice_session
+        self._loop = asyncio.get_event_loop()
+        # Audio buffer for batching chunks to reduce cross-thread calls
+        self._audio_buffer = bytearray()
+        self._buffer_lock = asyncio.Lock()
+        # Buffer threshold: ~100ms of audio at 24kHz mono (2400 samples * 2 bytes)
+        self._buffer_threshold = 4800
+        
+    def wants_opus(self) -> bool:
+        """Return False - we want decoded PCM audio, not Opus."""
+        return False
+    
+    def write(self, user: discord.User, data: 'voice_recv.VoiceData'):
+        """
+        Handle incoming voice data from a user.
+        
+        This method is called by discord-ext-voice-recv when audio is received.
+        The audio is in Discord format (48kHz, 16-bit, stereo PCM).
+        
+        Args:
+            user: The Discord user who is speaking
+            data: The voice data containing PCM audio
+        """
+        if not self._voice_session.openai_session:
+            return
+        
+        try:
+            # Get the PCM audio data (48kHz, 16-bit, stereo)
+            pcm_data = data.pcm
+            
+            if pcm_data:
+                # Resample from Discord format (48kHz stereo) to OpenAI format (24kHz mono)
+                # Using the static method directly for efficiency
+                resampled_audio = AudioResampler.resample_48k_stereo_to_24k_mono(pcm_data)
+                
+                if resampled_audio:
+                    # Add to buffer
+                    self._audio_buffer.extend(resampled_audio)
+                    
+                    # Send when buffer reaches threshold to reduce cross-thread calls
+                    if len(self._audio_buffer) >= self._buffer_threshold:
+                        audio_to_send = bytes(self._audio_buffer)
+                        self._audio_buffer.clear()
+                        
+                        # Schedule the async send_audio call in the event loop
+                        asyncio.run_coroutine_threadsafe(
+                            self._voice_session.openai_session.send_audio(audio_to_send),
+                            self._loop
+                        )
+        except Exception as e:
+            logger.error(f"Error processing voice data from {user}: {e}")
+    
+    def cleanup(self):
+        """Clean up the audio sink and flush any remaining audio."""
+        # Flush any remaining buffered audio
+        if self._audio_buffer and self._voice_session.openai_session:
+            try:
+                audio_to_send = bytes(self._audio_buffer)
+                self._audio_buffer.clear()
+                asyncio.run_coroutine_threadsafe(
+                    self._voice_session.openai_session.send_audio(audio_to_send),
+                    self._loop
+                )
+            except Exception as e:
+                logger.warning(f"Error flushing audio buffer during cleanup: {e}")
+
+
+
 class VoiceSession:
     """
     Represents an active voice chat session with OpenAI Realtime API.
@@ -522,8 +619,8 @@ class VoiceSession:
         self.openai_session: Optional[OpenAIRealtimeSession] = None
         self._running = False
         self._audio_source: Optional[StreamingAudioSource] = None
+        self._audio_sink: Optional['OpenAIVoiceSink'] = None
         self._listen_task: Optional[asyncio.Task] = None
-        self._resampler = AudioResampler()
         
     @property
     def guild_id(self) -> int:
@@ -583,8 +680,8 @@ class VoiceSession:
         Args:
             audio_data: Raw PCM audio (24kHz, 16-bit, mono)
         """
-        # Resample to Discord format (48kHz stereo)
-        discord_audio = self._resampler.resample_24k_mono_to_48k_stereo(audio_data)
+        # Resample to Discord format (48kHz stereo) using static method
+        discord_audio = AudioResampler.resample_24k_mono_to_48k_stereo(audio_data)
         
         # Add to playback queue
         if self._audio_source:
@@ -594,34 +691,38 @@ class VoiceSession:
         """
         Main loop for receiving audio from Discord voice channel.
         
-        Note: Standard discord.py doesn't have built-in voice receive support.
-        Voice input capture requires the discord-ext-voice-recv extension or
-        similar third-party library. This implementation provides the playback
-        side (bot speaking) which works with standard discord.py.
-        
-        For full duplex operation:
-        1. Install discord-ext-voice-recv: pip install discord-ext-voice-recv
-        2. Implement a VoiceSink that captures user audio
-        3. Resample from Discord format (48kHz stereo) to OpenAI format (24kHz mono)  
-        4. Send audio chunks to OpenAI via self.openai_session.send_audio()
-        
-        The OpenAI Realtime API session is fully configured and ready to receive
-        audio input once voice receive is implemented.
+        Uses discord-ext-voice-recv extension when available to capture voice input
+        and stream it to OpenAI Realtime API.
         """
         try:
             logger.info("🎧 Voice session active - connected to OpenAI Realtime API")
-            logger.warning("⚠️ Voice INPUT is not yet implemented - bot can only PLAY audio, not LISTEN")
-            logger.warning("⚠️ Voice input capture requires discord-ext-voice-recv extension")
-            logger.info("📋 To enable voice input: pip install discord-ext-voice-recv")
             
-            # Keep the session alive
-            # When voice receive is implemented, this loop would:
-            # - Receive audio chunks from Discord
-            # - Resample using self._resampler.resample_48k_stereo_to_24k_mono()
-            # - Send to OpenAI using await self.openai_session.send_audio(audio_data)
-            
-            while self._running:
-                await asyncio.sleep(0.1)
+            # Check if voice receive is available and voice client supports it
+            if VOICE_RECV_AVAILABLE and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
+                logger.info("✅ Voice INPUT enabled - bot can listen and respond")
+                
+                # Create and start the audio sink for receiving voice
+                self._audio_sink = OpenAIVoiceSink(self)
+                self.voice_client.listen(self._audio_sink)
+                logger.info("🎤 Now listening for voice input from users")
+                
+                # Keep the session alive while listening
+                while self._running:
+                    await asyncio.sleep(0.1)
+                    
+            else:
+                # Voice receive not available - playback only mode
+                if not VOICE_RECV_AVAILABLE:
+                    logger.warning("⚠️ Voice INPUT is not available - discord-ext-voice-recv not installed")
+                    logger.info("📋 To enable voice input: pip install discord-ext-voice-recv")
+                else:
+                    logger.warning("⚠️ Voice INPUT is not available - VoiceRecvClient not active")
+                
+                logger.info("🔊 Bot can only PLAY audio responses, not LISTEN to users")
+                
+                # Keep the session alive in playback-only mode
+                while self._running:
+                    await asyncio.sleep(0.1)
                 
         except asyncio.CancelledError:
             logger.debug("Listen loop cancelled")
@@ -632,6 +733,19 @@ class VoiceSession:
         """Stop the voice session and cleanup."""
         logger.info(f"🔌 Stopping voice session in guild {self.guild_id}...")
         self._running = False
+        
+        # Stop listening for voice input if active
+        if VOICE_RECV_AVAILABLE and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
+            try:
+                self.voice_client.stop_listening()
+                logger.info("🔇 Stopped listening for voice input")
+            except Exception as e:
+                logger.warning(f"Error stopping voice listening: {e}")
+        
+        # Cleanup audio sink
+        if self._audio_sink:
+            self._audio_sink.cleanup()
+            self._audio_sink = None
         
         # Cancel listen task
         if self._listen_task:
