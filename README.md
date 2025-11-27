@@ -125,27 +125,55 @@ When you mention the bot in a reply to another message, it will automatically in
 
 ### Voice Bot (Speech-to-Speech)
 
-The bot supports speech interaction using OpenAI's GPT-4o Realtime API:
+The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime API:
 
 **How to use:**
 1. Join a voice channel in your Discord server
 2. Use `/connect` to have the bot join your voice channel
-3. The bot will respond with voice when it receives audio input
+3. Speak naturally - the bot will listen and respond in real-time
 4. Use `/disconnect` when you're done
 
-**Requirements:**
-- FFmpeg must be installed on the server
+**System Requirements:**
+- **FFmpeg**: Required for audio processing
+  ```bash
+  # Ubuntu/Debian
+  sudo apt-get update && sudo apt-get install -y ffmpeg
+  
+  # macOS
+  brew install ffmpeg
+  
+  # Windows
+  # Download from https://ffmpeg.org/download.html
+  ```
+- **Opus Library**: Required for Discord voice support
+  ```bash
+  # Ubuntu/Debian
+  sudo apt-get install -y libopus0
+  
+  # macOS (usually bundled with discord.py)
+  brew install opus
+  ```
+
+**Python Requirements:**
 - OpenAI API key with access to the GPT-4o Realtime API
+- `discord-ext-voice-recv` extension (included in requirements.txt) for voice input
+
+**Discord Permissions:**
 - Bot needs "Connect" and "Speak" permissions in the voice channel
-- For full voice input support: `discord-ext-voice-recv` extension (optional)
 
 **Features:**
+- Full-duplex voice interaction (listen and speak simultaneously)
 - Real-time OpenAI Realtime API integration
 - Audio response playback into voice channel
 - Server-side voice activity detection (VAD) configured
+- Automatic audio format conversion (Discord 48kHz stereo ↔ OpenAI 24kHz mono)
 - Proper session management and cleanup
 
-**Note:** Standard discord.py doesn't include voice receive support. The current implementation provides audio playback (bot speaking). For full duplex voice input, the `discord-ext-voice-recv` extension can be added.
+**Docker Deployment:**
+If running in Docker, add these to your Dockerfile:
+```dockerfile
+RUN apt-get update && apt-get install -y ffmpeg libopus0
+```
 
 ### Usage Tracking & Tier System
 
