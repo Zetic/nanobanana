@@ -166,15 +166,15 @@ class OpenAIRealtimeSession:
             
         except websockets.exceptions.InvalidStatusCode as e:
             error_msg = f"OpenAI API returned invalid status code {e.status_code}"
-            logger.error(f"Failed to connect to OpenAI Realtime API: {error_msg}")
+            logger.error(error_msg)
             return False, error_msg
         except websockets.exceptions.WebSocketException as e:
             error_msg = f"WebSocket connection error: {type(e).__name__}: {e}"
-            logger.error(f"Failed to connect to OpenAI Realtime API: {error_msg}")
+            logger.error(error_msg)
             return False, error_msg
         except Exception as e:
-            error_msg = f"Connection error: {type(e).__name__}: {e}"
-            logger.error(f"Failed to connect to OpenAI Realtime API: {error_msg}")
+            error_msg = f"OpenAI connection error: {type(e).__name__}: {e}"
+            logger.error(error_msg)
             return False, error_msg
     
     async def _configure_session(self):
@@ -409,7 +409,7 @@ class VoiceConnectionManager:
                 return None, error_reason
                 
         except discord.ClientException as e:
-            error_msg = f"Discord client error while connecting to voice channel: {e}"
+            error_msg = f"Discord client error: {e}"
             logger.error(error_msg)
             return None, error_msg
         except discord.opus.OpusNotLoaded as e:
@@ -417,7 +417,7 @@ class VoiceConnectionManager:
             logger.error(error_msg)
             return None, error_msg
         except Exception as e:
-            error_msg = f"Failed to connect to voice channel: {type(e).__name__}: {e}"
+            error_msg = f"Voice channel connection error: {type(e).__name__}: {e}"
             logger.error(error_msg)
             return None, error_msg
     
@@ -554,7 +554,7 @@ class VoiceSession:
         try:
             self.voice_client.play(self._audio_source)
         except Exception as e:
-            error_msg = f"Failed to start audio playback: {type(e).__name__}: {e}"
+            error_msg = f"Audio playback error: {type(e).__name__}: {e}"
             logger.error(error_msg)
             return False, error_msg
         
