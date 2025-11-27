@@ -17,11 +17,18 @@ from log_manager import log_manager
 from voice_handler import voice_manager
 
 # Set up logging
+# Use DEBUG level if DEBUG_LOGGING is enabled in config, otherwise INFO
+log_level = logging.DEBUG if config.DEBUG_LOGGING else logging.INFO
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Enable debug logging in log_manager if configured
+if config.DEBUG_LOGGING:
+    log_manager.set_debug_logging(True)
+    logger.info("Debug logging enabled via DEBUG_LOGGING environment variable")
 
 # All UI classes removed - bot now returns natural API responses directly
 

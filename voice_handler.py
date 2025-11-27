@@ -5,6 +5,10 @@ This module handles:
 - Audio streaming to/from OpenAI Realtime API via WebSocket
 - Audio playback using FFmpeg
 - Voice input capture using discord-ext-voice-recv
+
+Debug Logging:
+- Set logging level to DEBUG to see detailed timing information
+- Useful for diagnosing slow response times in voice sessions
 """
 
 import asyncio
@@ -13,6 +17,7 @@ import json
 import logging
 import struct
 import io
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List, Tuple
 from collections import deque
@@ -33,6 +38,119 @@ import config
 from model_interface import get_model_generator
 
 logger = logging.getLogger(__name__)
+
+
+class VoiceDebugTimer:
+    """
+    Utility class for tracking timing of voice pipeline operations.
+    Provides detailed timing information when DEBUG logging is enabled.
+    """
+    
+    def __init__(self, operation_name: str):
+        self.operation_name = operation_name
+        self.start_time = None
+        self.checkpoints: List[Tuple[str, float]] = []
+    
+    def start(self):
+        """Start timing an operation."""
+        self.start_time = time.perf_counter()
+        self.checkpoints = []
+        logger.debug(f"[TIMING] {self.operation_name} - STARTED at {datetime.now().isoformat()}")
+    
+    def checkpoint(self, name: str):
+        """Record a checkpoint with elapsed time."""
+        if self.start_time is None:
+            return
+        elapsed = (time.perf_counter() - self.start_time) * 1000  # Convert to ms
+        self.checkpoints.append((name, elapsed))
+        logger.debug(f"[TIMING] {self.operation_name} - {name}: {elapsed:.2f}ms elapsed")
+    
+    def end(self):
+        """End timing and log total duration."""
+        if self.start_time is None:
+            return
+        total = (time.perf_counter() - self.start_time) * 1000
+        logger.debug(f"[TIMING] {self.operation_name} - COMPLETED in {total:.2f}ms at {datetime.now().isoformat()}")
+        return total
+
+
+class VoiceSessionStats:
+    """
+    Tracks statistics for a voice session for debugging purposes.
+    """
+    
+    def __init__(self):
+        self.session_start_time: Optional[float] = None
+        self.audio_chunks_sent: int = 0
+        self.audio_chunks_received: int = 0
+        self.audio_bytes_sent: int = 0
+        self.audio_bytes_received: int = 0
+        self.speech_events: int = 0
+        self.response_events: int = 0
+        self.function_calls: int = 0
+        self.last_audio_sent_time: Optional[float] = None
+        self.last_audio_received_time: Optional[float] = None
+        self.last_speech_start_time: Optional[float] = None
+        self.last_response_start_time: Optional[float] = None
+    
+    def start_session(self):
+        """Mark session start time."""
+        self.session_start_time = time.perf_counter()
+        logger.debug(f"[STATS] Voice session started at {datetime.now().isoformat()}")
+    
+    def record_audio_sent(self, byte_count: int):
+        """Record audio chunk sent to OpenAI."""
+        self.audio_chunks_sent += 1
+        self.audio_bytes_sent += byte_count
+        self.last_audio_sent_time = time.perf_counter()
+        if self.audio_chunks_sent % 50 == 0:  # Log every 50 chunks to avoid spam
+            logger.debug(f"[STATS] Audio sent: {self.audio_chunks_sent} chunks, {self.audio_bytes_sent} bytes total")
+    
+    def record_audio_received(self, byte_count: int):
+        """Record audio chunk received from OpenAI."""
+        self.audio_chunks_received += 1
+        self.audio_bytes_received += byte_count
+        self.last_audio_received_time = time.perf_counter()
+        if self.audio_chunks_received % 50 == 0:  # Log every 50 chunks to avoid spam
+            logger.debug(f"[STATS] Audio received: {self.audio_chunks_received} chunks, {self.audio_bytes_received} bytes total")
+    
+    def record_speech_start(self):
+        """Record when user speech is detected."""
+        self.speech_events += 1
+        self.last_speech_start_time = time.perf_counter()
+        logger.debug(f"[STATS] Speech event #{self.speech_events} started at {datetime.now().isoformat()}")
+    
+    def record_response_start(self):
+        """Record when bot starts generating response."""
+        self.response_events += 1
+        self.last_response_start_time = time.perf_counter()
+        if self.last_speech_start_time:
+            latency = (self.last_response_start_time - self.last_speech_start_time) * 1000
+            logger.debug(f"[STATS] Response #{self.response_events} started - latency from speech start: {latency:.2f}ms")
+        else:
+            logger.debug(f"[STATS] Response #{self.response_events} started at {datetime.now().isoformat()}")
+    
+    def record_function_call(self, function_name: str):
+        """Record a function call."""
+        self.function_calls += 1
+        logger.debug(f"[STATS] Function call #{self.function_calls}: {function_name}")
+    
+    def get_summary(self) -> str:
+        """Get a summary of session statistics."""
+        if self.session_start_time:
+            duration = time.perf_counter() - self.session_start_time
+        else:
+            duration = 0
+        
+        return (
+            f"Session Duration: {duration:.1f}s | "
+            f"Audio Sent: {self.audio_chunks_sent} chunks ({self.audio_bytes_sent} bytes) | "
+            f"Audio Received: {self.audio_chunks_received} chunks ({self.audio_bytes_received} bytes) | "
+            f"Speech Events: {self.speech_events} | "
+            f"Responses: {self.response_events} | "
+            f"Function Calls: {self.function_calls}"
+        )
+
 
 # Default model for voice image generation
 DEFAULT_VOICE_IMAGE_MODEL = "nanobanana"
@@ -140,6 +258,7 @@ class OpenAIRealtimeSession:
         self._audio_buffer = bytearray()
         self._response_in_progress = False
         self._pending_function_calls: Dict[str, Dict[str, Any]] = {}  # Track pending function calls
+        self._stats = VoiceSessionStats()  # Debug statistics tracking
         
     async def connect(self) -> tuple[bool, Optional[str]]:
         """
@@ -148,6 +267,9 @@ class OpenAIRealtimeSession:
         Returns:
             Tuple of (True, None) if connection successful, or (False, error_reason) on failure
         """
+        timer = VoiceDebugTimer("OpenAI WebSocket Connect")
+        timer.start()
+        
         if not config.OPENAI_API_KEY:
             error_msg = "OPENAI_API_KEY not configured"
             logger.error(error_msg)
@@ -156,6 +278,7 @@ class OpenAIRealtimeSession:
         try:
             # Build URL with model parameter
             url = f"{OPENAI_REALTIME_URL}?model={config.OPENAI_REALTIME_MODEL}"
+            logger.debug(f"[DEBUG] Connecting to OpenAI Realtime API: {url}")
             
             # Connect with API key in header
             headers = {
@@ -169,29 +292,36 @@ class OpenAIRealtimeSession:
                 ping_interval=20,
                 ping_timeout=30
             )
+            timer.checkpoint("WebSocket connected")
             
             self._running = True
+            self._stats.start_session()
             
             # Configure the session
             await self._configure_session()
+            timer.checkpoint("Session configured")
             
             # Start receiving messages
             self._receive_task = asyncio.create_task(self._receive_loop())
             
+            timer.end()
             logger.info("Connected to OpenAI Realtime API")
             return True, None
             
         except websockets.exceptions.InvalidStatusCode as e:
             error_msg = f"OpenAI API returned invalid status code {e.status_code}"
             logger.error(error_msg)
+            timer.end()
             return False, error_msg
         except websockets.exceptions.WebSocketException as e:
             error_msg = f"WebSocket connection error: {type(e).__name__}: {e}"
             logger.error(error_msg)
+            timer.end()
             return False, error_msg
         except Exception as e:
             error_msg = f"OpenAI connection error: {type(e).__name__}: {e}"
             logger.error(error_msg)
+            timer.end()
             return False, error_msg
     
     async def _configure_session(self):
@@ -241,6 +371,8 @@ class OpenAIRealtimeSession:
         """Send an event to the OpenAI WebSocket."""
         if self.websocket and self.websocket.state == WebSocketState.OPEN:
             try:
+                event_type = event.get("type", "unknown")
+                logger.debug(f"[DEBUG] Sending event to OpenAI: {event_type}")
                 await self.websocket.send(json.dumps(event))
             except Exception as e:
                 logger.error(f"Error sending event to OpenAI: {e}")
@@ -253,7 +385,11 @@ class OpenAIRealtimeSession:
             audio_data: Raw PCM audio bytes (24kHz, 16-bit, mono)
         """
         if not self.websocket or self.websocket.state != WebSocketState.OPEN:
+            logger.debug("[DEBUG] Cannot send audio - WebSocket not open")
             return
+        
+        # Track stats
+        self._stats.record_audio_sent(len(audio_data))
         
         # Encode audio to base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
@@ -270,6 +406,8 @@ class OpenAIRealtimeSession:
         if not self.websocket or self.websocket.state != WebSocketState.OPEN:
             return
         
+        logger.debug("[DEBUG] Committing audio buffer and requesting response")
+        
         # Commit the audio buffer
         await self._send_event({"type": "input_audio_buffer.commit"})
         
@@ -278,6 +416,7 @@ class OpenAIRealtimeSession:
     
     async def _receive_loop(self):
         """Main loop for receiving messages from OpenAI."""
+        logger.debug("[DEBUG] Starting OpenAI message receive loop")
         try:
             while self._running and self.websocket:
                 try:
@@ -288,6 +427,7 @@ class OpenAIRealtimeSession:
                     await self._handle_message(message)
                 except asyncio.TimeoutError:
                     # Send keepalive ping
+                    logger.debug("[DEBUG] WebSocket receive timeout - continuing (keepalive)")
                     continue
                 except websockets.exceptions.ConnectionClosed:
                     logger.info("OpenAI WebSocket connection closed")
@@ -298,6 +438,7 @@ class OpenAIRealtimeSession:
             logger.error(f"Error in receive loop: {e}")
         finally:
             self._running = False
+            logger.debug(f"[DEBUG] Receive loop ended. Session stats: {self._stats.get_summary()}")
     
     async def _handle_message(self, message: str):
         """Handle incoming WebSocket messages from OpenAI."""
@@ -305,11 +446,17 @@ class OpenAIRealtimeSession:
             event = json.loads(message)
             event_type = event.get("type", "")
             
+            # Log all event types at debug level for troubleshooting
+            logger.debug(f"[DEBUG] Received OpenAI event: {event_type} at {datetime.now().isoformat()}")
+            
             if event_type == "error":
-                logger.error(f"OpenAI Realtime API error: {event.get('error', {})}")
+                error_details = event.get('error', {})
+                logger.error(f"OpenAI Realtime API error: {error_details}")
+                logger.debug(f"[DEBUG] Full error event: {json.dumps(event)}")
                 
             elif event_type == "session.created":
                 logger.info("OpenAI Realtime session created")
+                logger.debug(f"[DEBUG] Session details: {json.dumps(event.get('session', {}))}")
                 
             elif event_type == "session.updated":
                 logger.info("⚙️ OpenAI Realtime session configured successfully")
@@ -317,12 +464,14 @@ class OpenAIRealtimeSession:
             elif event_type == "response.created":
                 logger.info("🤔 Bot is generating a response...")
                 self._response_in_progress = True
+                self._stats.record_response_start()
                 
             elif event_type == "response.audio.delta":
                 # Received audio chunk from OpenAI
                 audio_base64 = event.get("delta", "")
                 if audio_base64:
                     audio_data = base64.b64decode(audio_base64)
+                    self._stats.record_audio_received(len(audio_data))
                     self._audio_buffer.extend(audio_data)
                     
                     # Send chunks to callback when buffer is large enough
@@ -337,6 +486,7 @@ class OpenAIRealtimeSession:
                     self.on_audio_response(bytes(self._audio_buffer))
                     self._audio_buffer.clear()
                 logger.info("🔊 Audio response complete - sent to Discord")
+                logger.debug(f"[DEBUG] Audio response complete. Stats: chunks received={self._stats.audio_chunks_received}, bytes={self._stats.audio_bytes_received}")
                 
             elif event_type == "response.audio_transcript.delta":
                 # Received text transcription of bot's response
@@ -359,20 +509,28 @@ class OpenAIRealtimeSession:
                     
             elif event_type == "input_audio_buffer.speech_started":
                 logger.info("🎤 Speech detected - listening to user")
+                self._stats.record_speech_start()
                 
             elif event_type == "input_audio_buffer.speech_stopped":
                 logger.info("🔇 Speech ended - processing user input")
+                logger.debug(f"[DEBUG] Speech processing started at {datetime.now().isoformat()}")
                 
             elif event_type == "response.function_call_arguments.done":
                 # Function call arguments are complete - execute the function
+                self._stats.record_function_call(event.get("name", "unknown"))
                 await self._handle_function_call(event)
                 
             elif event_type == "response.done":
                 logger.info("✅ Response generation complete - finished speaking")
                 self._response_in_progress = False
+                logger.debug(f"[DEBUG] Response complete. Current session stats: {self._stats.get_summary()}")
                 
             elif event_type == "rate_limits.updated":
-                logger.debug(f"Rate limits updated: {event.get('rate_limits', [])}")
+                logger.debug(f"[DEBUG] Rate limits updated: {event.get('rate_limits', [])}")
+                
+            else:
+                # Log unknown event types at debug level
+                logger.debug(f"[DEBUG] Unhandled event type: {event_type}")
                 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse OpenAI message: {e}")
@@ -386,6 +544,9 @@ class OpenAIRealtimeSession:
         Args:
             event: The function call arguments done event
         """
+        timer = VoiceDebugTimer("Function Call Handling")
+        timer.start()
+        
         try:
             call_id = event.get("call_id")
             name = event.get("name")
@@ -396,6 +557,7 @@ class OpenAIRealtimeSession:
                 return
             
             logger.info(f"🔧 Function call received: {name} (call_id: {call_id})")
+            logger.debug(f"[DEBUG] Function call arguments: {arguments_str}")
             
             # Parse arguments
             try:
@@ -403,6 +565,8 @@ class OpenAIRealtimeSession:
             except json.JSONDecodeError:
                 arguments = {}
                 logger.warning(f"Failed to parse function arguments: {arguments_str}")
+            
+            timer.checkpoint("Arguments parsed")
             
             # Handle generate_image function
             if name == "generate_image":
@@ -417,9 +581,12 @@ class OpenAIRealtimeSession:
                 # Unknown function
                 logger.warning(f"Unknown function called: {name}")
                 await self._send_function_output(call_id, f"Error: Unknown function '{name}'")
+            
+            timer.end()
                 
         except Exception as e:
             logger.error(f"Error handling function call: {e}")
+            timer.end()
             if call_id:
                 await self._send_function_output(call_id, f"Error executing function: {str(e)}")
     
@@ -431,19 +598,28 @@ class OpenAIRealtimeSession:
             call_id: The function call ID
             prompt: The image generation prompt
         """
+        timer = VoiceDebugTimer("Image Generation")
+        timer.start()
+        
         try:
             # Use the existing Gemini model generator
+            logger.debug(f"[DEBUG] Using model: {DEFAULT_VOICE_IMAGE_MODEL}")
             generator = get_model_generator(DEFAULT_VOICE_IMAGE_MODEL)
+            timer.checkpoint("Model generator obtained")
             
             # Generate the image
+            logger.debug(f"[DEBUG] Starting image generation for prompt: {prompt[:100]}...")
             generated_image, text_response, usage_metadata = await generator.generate_image_from_text(prompt)
+            timer.checkpoint("Image generation API call complete")
             
             if generated_image:
                 logger.info(f"✅ Image generated successfully for prompt: {prompt}")
+                logger.debug(f"[DEBUG] Usage metadata: {usage_metadata}")
                 
                 # Notify callback that image was generated
                 if self.on_image_generated:
                     self.on_image_generated(generated_image, prompt)
+                    timer.checkpoint("Image callback notified")
                 
                 # Send success response back to OpenAI
                 await self._send_function_output(
@@ -452,11 +628,15 @@ class OpenAIRealtimeSession:
                 )
             else:
                 logger.warning(f"Image generation failed for prompt: {prompt}")
+                logger.debug(f"[DEBUG] Text response from failed generation: {text_response}")
                 error_msg = text_response if text_response else "Failed to generate image. Please try again with a different description."
                 await self._send_function_output(call_id, error_msg)
+            
+            timer.end()
                 
         except Exception as e:
             logger.error(f"Error during image generation: {e}")
+            timer.end()
             await self._send_function_output(call_id, f"Error generating image: {str(e)}")
     
     async def _send_function_output(self, call_id: str, output: str):
@@ -538,6 +718,9 @@ class VoiceConnectionManager:
         Returns:
             Tuple of (VoiceSession, None) if successful, or (None, error_reason) on failure
         """
+        timer = VoiceDebugTimer("Voice Channel Connection")
+        timer.start()
+        
         guild_id = voice_channel.guild.id
         
         # Check if already connected
@@ -548,6 +731,7 @@ class VoiceConnectionManager:
         try:
             # Connect to voice channel
             logger.info(f"🎙️ Connecting to voice channel '{voice_channel.name}' (ID: {voice_channel.id}) in guild {guild_id}")
+            logger.debug(f"[DEBUG] Voice receive extension available: {VOICE_RECV_AVAILABLE}")
             
             # Use VoiceRecvClient if available for voice input support
             if VOICE_RECV_AVAILABLE:
@@ -557,6 +741,7 @@ class VoiceConnectionManager:
                 logger.warning("⚠️ Voice receive extension not available - voice input disabled")
                 voice_client = await voice_channel.connect()
             
+            timer.checkpoint("Discord voice channel connected")
             logger.info(f"✅ Successfully connected to Discord voice channel '{voice_channel.name}'")
             
             # Create voice session with text channel for image posting
@@ -566,25 +751,32 @@ class VoiceConnectionManager:
             # Start the session (connects to OpenAI and starts audio processing)
             logger.info("🚀 Starting voice session and OpenAI Realtime API connection...")
             success, error_reason = await session.start()
+            timer.checkpoint("Voice session start attempt complete")
+            
             if success:
+                timer.end()
                 logger.info(f"✅ Voice session fully started in guild {guild_id}")
                 return session, None
             else:
                 # Failed to start session, cleanup
+                timer.end()
                 logger.error(f"❌ Voice session failed to start in guild {guild_id}: {error_reason}")
                 await self.disconnect(guild_id)
                 return None, error_reason
                 
         except discord.ClientException as e:
             error_msg = f"Discord client error: {e}"
+            timer.end()
             logger.error(f"❌ {error_msg}")
             return None, error_msg
         except discord.opus.OpusNotLoaded as e:
             error_msg = f"Opus library not loaded (required for voice): {e}"
+            timer.end()
             logger.error(f"❌ {error_msg}")
             return None, error_msg
         except Exception as e:
             error_msg = f"Voice channel connection error: {type(e).__name__}: {e}"
+            timer.end()
             logger.error(f"❌ {error_msg}")
             return None, error_msg
     
@@ -598,14 +790,18 @@ class VoiceConnectionManager:
         Returns:
             True if disconnected successfully, False otherwise
         """
+        logger.debug(f"[DEBUG] Disconnecting voice session for guild {guild_id}")
         session = self._sessions.pop(guild_id, None)
         if session:
             await session.stop()
+            logger.debug(f"[DEBUG] Voice session disconnected for guild {guild_id}")
             return True
+        logger.debug(f"[DEBUG] No active session found for guild {guild_id}")
         return False
     
     async def disconnect_all(self):
         """Disconnect from all voice channels."""
+        logger.debug(f"[DEBUG] Disconnecting all voice sessions ({len(self._sessions)} active)")
         guild_ids = list(self._sessions.keys())
         for guild_id in guild_ids:
             await self.disconnect(guild_id)
@@ -781,20 +977,29 @@ class VoiceSession:
         Returns:
             Tuple of (True, None) if started successfully, or (False, error_reason) on failure
         """
+        timer = VoiceDebugTimer("Voice Session Start")
+        timer.start()
+        
         # Create audio source for playback
         self._audio_source = StreamingAudioSource()
+        logger.debug("[DEBUG] Audio source created")
         
         # Create OpenAI session with callback for audio responses and image generation
         self.openai_session = OpenAIRealtimeSession(
             on_audio_response=self._handle_openai_audio,
             on_image_generated=self._handle_image_generated
         )
+        logger.debug("[DEBUG] OpenAI session instance created")
+        timer.checkpoint("Session instances created")
         
         # Connect to OpenAI
         logger.info("🔗 Connecting to OpenAI Realtime API...")
         success, error_reason = await self.openai_session.connect()
+        timer.checkpoint("OpenAI connection attempt complete")
+        
         if not success:
             logger.error(f"❌ Failed to connect to OpenAI Realtime API: {error_reason}")
+            timer.end()
             return False, error_reason
         
         logger.info("✅ Successfully connected to OpenAI Realtime API")
@@ -802,16 +1007,22 @@ class VoiceSession:
         
         # Start listening for Discord audio
         self._listen_task = asyncio.create_task(self._listen_loop())
+        logger.debug("[DEBUG] Listen loop task created")
+        timer.checkpoint("Listen loop started")
         
         # Start playing audio source
         try:
             self.voice_client.play(self._audio_source)
             logger.info("🔊 Audio playback initialized - ready to play bot responses")
+            timer.checkpoint("Audio playback started")
         except Exception as e:
             error_msg = f"Audio playback error: {type(e).__name__}: {e}"
             logger.error(f"❌ {error_msg}")
+            timer.end()
             return False, error_msg
         
+        timer.end()
+        logger.debug(f"[DEBUG] Voice session fully started at {datetime.now().isoformat()}")
         return True, None
     
     def _handle_openai_audio(self, audio_data: bytes):
@@ -838,6 +1049,7 @@ class VoiceSession:
             image: The generated PIL Image
             prompt: The prompt used to generate the image
         """
+        logger.debug(f"[DEBUG] Image generated callback triggered for prompt: {prompt[:50]}...")
         if image and self.text_channel:
             # Queue the image for sending (will be processed in the event loop)
             self._pending_images.append((image, prompt))
@@ -849,6 +1061,7 @@ class VoiceSession:
         while self._pending_images:
             image, prompt = self._pending_images.pop(0)
             try:
+                logger.debug(f"[DEBUG] Sending generated image to Discord channel")
                 # Save image to buffer
                 img_buffer = io.BytesIO()
                 image.save(img_buffer, format='PNG')
@@ -877,19 +1090,27 @@ class VoiceSession:
         """
         try:
             logger.info("🎧 Voice session active - connected to OpenAI Realtime API")
+            logger.debug(f"[DEBUG] Listen loop started at {datetime.now().isoformat()}")
             
             # Check if voice receive is available and voice client supports it
             if VOICE_RECV_AVAILABLE and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
                 logger.info("✅ Voice INPUT enabled - bot can listen and respond")
+                logger.debug("[DEBUG] VoiceRecvClient is active, creating audio sink")
                 
                 # Create and start the audio sink for receiving voice
                 self._audio_sink = OpenAIVoiceSink(self)
                 self.voice_client.listen(self._audio_sink)
                 logger.info("🎤 Now listening for voice input from users")
+                logger.debug("[DEBUG] Audio sink attached to voice client")
                 
                 # Keep the session alive while listening
+                loop_count = 0
                 while self._running:
                     await asyncio.sleep(0.1)
+                    loop_count += 1
+                    # Log periodic heartbeat every 5 minutes (3000 * 0.1s = 300s = 5min)
+                    if loop_count % 3000 == 0:
+                        logger.debug(f"[DEBUG] Voice session heartbeat - running for {loop_count * 0.1:.0f}s")
                     
             else:
                 # Voice receive not available - playback only mode
@@ -900,18 +1121,24 @@ class VoiceSession:
                     logger.warning("⚠️ Voice INPUT is not available - VoiceRecvClient not active")
                 
                 logger.info("🔊 Bot can only PLAY audio responses, not LISTEN to users")
+                logger.debug("[DEBUG] Running in playback-only mode")
                 
                 # Keep the session alive in playback-only mode
                 while self._running:
                     await asyncio.sleep(0.1)
                 
         except asyncio.CancelledError:
-            logger.debug("Listen loop cancelled")
+            logger.debug("[DEBUG] Listen loop cancelled")
         except Exception as e:
             logger.error(f"Error in listen loop: {e}")
+        finally:
+            logger.debug(f"[DEBUG] Listen loop ended at {datetime.now().isoformat()}")
     
     async def stop(self):
         """Stop the voice session and cleanup."""
+        timer = VoiceDebugTimer("Voice Session Stop")
+        timer.start()
+        
         logger.info(f"🔌 Stopping voice session in guild {self.guild_id}...")
         self._running = False
         
@@ -920,6 +1147,7 @@ class VoiceSession:
             try:
                 self.voice_client.stop_listening()
                 logger.info("🔇 Stopped listening for voice input")
+                timer.checkpoint("Voice listening stopped")
             except Exception as e:
                 logger.warning(f"Error stopping voice listening: {e}")
         
@@ -927,6 +1155,7 @@ class VoiceSession:
         if self._audio_sink:
             self._audio_sink.cleanup()
             self._audio_sink = None
+            logger.debug("[DEBUG] Audio sink cleaned up")
         
         # Cancel listen task
         if self._listen_task:
@@ -936,26 +1165,32 @@ class VoiceSession:
             except asyncio.CancelledError:
                 pass
             self._listen_task = None
+            timer.checkpoint("Listen task cancelled")
         
         # Disconnect from OpenAI
         if self.openai_session:
             logger.info("🔗 Disconnecting from OpenAI Realtime API...")
             await self.openai_session.disconnect()
             self.openai_session = None
+            timer.checkpoint("OpenAI disconnected")
         
         # Stop audio playback
         if self.voice_client.is_playing():
             self.voice_client.stop()
+            logger.debug("[DEBUG] Audio playback stopped")
         
         # Cleanup audio source
         if self._audio_source:
             self._audio_source.cleanup()
             self._audio_source = None
+            logger.debug("[DEBUG] Audio source cleaned up")
         
         # Disconnect from voice channel
         if self.voice_client.is_connected():
             await self.voice_client.disconnect()
+            timer.checkpoint("Discord voice disconnected")
         
+        timer.end()
         logger.info(f"👋 Voice session stopped in guild {self.guild_id}")
 
 
