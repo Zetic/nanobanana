@@ -539,12 +539,19 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 **Slash Commands:**
 • `/help` - Show this help message
 • `/avatar` - Transform your avatar with themed templates (Halloween, etc.)
-• `/connect` - Join your voice channel for speech-to-speech AI interaction
+• `/connect` - Join your voice channel for speech-to-speech AI interaction (can generate images!)
 • `/disconnect` - Disconnect from voice channel
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)
-• `/tier` - Assign a tier to a user (elevated users only)"""
+• `/tier` - Assign a tier to a user (elevated users only)
+
+**Voice Features:**
+When connected to a voice channel, you can ask me to generate images by voice! Just say something like:
+• "Create an image of a sunset over mountains"
+• "Draw me a cute cartoon cat"
+• "Generate a futuristic city skyline"
+The generated images will be posted in the text channel where you used `/connect`."""
     
     await interaction.response.send_message(help_text)
 
@@ -999,12 +1006,14 @@ async def connect_slash(interaction: discord.Interaction):
         await interaction.response.defer()
         
         # Connect to voice channel and start session
-        session, error_reason = await voice_manager.connect(voice_channel)
+        # Pass the text channel so images can be posted there
+        session, error_reason = await voice_manager.connect(voice_channel, interaction.channel)
         
         if session:
             await interaction.followup.send(
                 f"🎙️ Connected to **{voice_channel.name}**!\n\n"
                 f"I'm now listening and ready to chat. Speak naturally and I'll respond.\n"
+                f"You can ask me to generate images and I'll post them here.\n"
                 f"Use `/disconnect` when you're done."
             )
             logger.info(f"User {interaction.user.id} started voice session in channel {voice_channel.id}")
