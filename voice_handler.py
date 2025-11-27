@@ -92,11 +92,13 @@ class AudioResampler:
         num_samples = len(audio_data) // 2
         samples = struct.unpack(f'<{num_samples}h', audio_data)
         
-        # Upsample from 24kHz to 48kHz (duplicate each sample)
-        # Convert mono to stereo (duplicate each sample for both channels)
+        # Upsample from 24kHz to 48kHz: duplicate each sample (2x)
+        # Convert mono to stereo: duplicate each upsampled sample for L and R channels (2x)
+        # Total: each original sample becomes 4 samples (sample, sample, sample, sample)
+        # This gives us: 24kHz mono -> 48kHz stereo
         stereo_upsampled = []
         for sample in samples:
-            # Duplicate for upsampling and stereo
+            # 4 values per sample: 2 for upsampling * 2 for stereo channels
             stereo_upsampled.extend([sample, sample, sample, sample])
         
         # Pack back to bytes
@@ -550,23 +552,33 @@ class VoiceSession:
     async def _listen_loop(self):
         """
         Main loop for receiving audio from Discord voice channel.
-        Note: discord.py's VoiceClient doesn't have built-in voice receive support.
-        This is a placeholder for when voice receive is available via extensions.
+        
+        Note: Standard discord.py doesn't have built-in voice receive support.
+        Voice input capture requires the discord-ext-voice-recv extension or
+        similar third-party library. This implementation provides the playback
+        side (bot speaking) which works with standard discord.py.
+        
+        For full duplex operation:
+        1. Install discord-ext-voice-recv: pip install discord-ext-voice-recv
+        2. Implement a VoiceSink that captures user audio
+        3. Resample from Discord format (48kHz stereo) to OpenAI format (24kHz mono)  
+        4. Send audio chunks to OpenAI via self.openai_session.send_audio()
+        
+        The OpenAI Realtime API session is fully configured and ready to receive
+        audio input once voice receive is implemented.
         """
         try:
-            logger.info("Voice listening loop started (waiting for voice receive support)")
+            logger.info("Voice session active - bot can play audio responses")
+            logger.info("Note: Voice input capture requires discord-ext-voice-recv extension")
             
-            # Note: Standard discord.py doesn't support voice receive out of the box.
-            # This would require discord-ext-voice-recv or similar extension.
-            # For now, this is a placeholder that keeps the session alive.
+            # Keep the session alive
+            # When voice receive is implemented, this loop would:
+            # - Receive audio chunks from Discord
+            # - Resample using self._resampler.resample_48k_stereo_to_24k_mono()
+            # - Send to OpenAI using await self.openai_session.send_audio(audio_data)
             
             while self._running:
                 await asyncio.sleep(0.1)
-                
-                # In a full implementation with voice receive support:
-                # 1. Receive raw audio from Discord voice channel
-                # 2. Resample from Discord format (48kHz stereo) to OpenAI format (24kHz mono)
-                # 3. Send to OpenAI via self.openai_session.send_audio()
                 
         except asyncio.CancelledError:
             logger.debug("Listen loop cancelled")

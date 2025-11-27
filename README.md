@@ -125,24 +125,27 @@ When you mention the bot in a reply to another message, it will automatically in
 
 ### Voice Bot (Speech-to-Speech)
 
-The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime API:
+The bot supports speech interaction using OpenAI's GPT-4o Realtime API:
 
 **How to use:**
 1. Join a voice channel in your Discord server
 2. Use `/connect` to have the bot join your voice channel
-3. Speak naturally - the bot will listen and respond with voice
+3. The bot will respond with voice when it receives audio input
 4. Use `/disconnect` when you're done
 
 **Requirements:**
 - FFmpeg must be installed on the server
 - OpenAI API key with access to the GPT-4o Realtime API
 - Bot needs "Connect" and "Speak" permissions in the voice channel
+- For full voice input support: `discord-ext-voice-recv` extension (optional)
 
 **Features:**
-- Real-time speech-to-speech conversation
-- Server-side voice activity detection (VAD)
-- Automatic turn-taking for natural conversation flow
-- Works with multiple users in the channel (responds sequentially)
+- Real-time OpenAI Realtime API integration
+- Audio response playback into voice channel
+- Server-side voice activity detection (VAD) configured
+- Proper session management and cleanup
+
+**Note:** Standard discord.py doesn't include voice receive support. The current implementation provides audio playback (bot speaking). For full duplex voice input, the `discord-ext-voice-recv` extension can be added.
 
 ### Usage Tracking & Tier System
 
