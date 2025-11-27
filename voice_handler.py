@@ -923,10 +923,10 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         Returns:
             RMS energy level as a float
         """
-        if not audio_data or len(audio_data) < 2:
+        if not audio_data:
             return 0.0
         
-        # Unpack as 16-bit signed integers
+        # Need at least 2 bytes for one 16-bit sample
         num_samples = len(audio_data) // 2
         if num_samples == 0:
             return 0.0
@@ -998,6 +998,12 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                             
                             logger.info(f"🔇 Client-side silence detected for {silence_duration_ms:.0f}ms - triggering response")
                             
+                            # Set response pending FIRST to prevent race conditions
+                            # (multiple audio chunks arriving simultaneously)
+                            self._response_pending = True
+                            self._has_received_speech = False
+                            self._silence_start_time = None
+                            
                             # Flush any remaining audio in buffer
                             if self._audio_buffer:
                                 audio_to_send = bytes(self._audio_buffer)
@@ -1012,11 +1018,6 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                                 self._voice_session.openai_session.commit_audio(),
                                 self._loop
                             )
-                            
-                            # Mark that we're waiting for a response
-                            self._response_pending = True
-                            self._has_received_speech = False
-                            self._silence_start_time = None
                             
                         # Don't send pure silence to OpenAI - this can confuse the VAD
                         # Only send if we're still in an active speech segment
