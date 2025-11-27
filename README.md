@@ -9,6 +9,7 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - **Multi-Image Processing**: Process multiple images simultaneously
 - **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
 - **Meme Generation**: Generate nonsensical memes using OpenAI
+- **Voice Bot**: Full-duplex speech-to-speech interaction using OpenAI's GPT-4o Realtime API
 - **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply (text from original message is ignored)
 - **Bot Snitching**: Catches users who delete messages that mentioned the bot (within 8 hours) and playfully calls them out
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
@@ -23,6 +24,8 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - Python 3.8+
 - Discord Bot Token
 - Google GenAI API Key
+- OpenAI API Key (for voice bot and meme generation)
+- FFmpeg (required for voice bot feature)
 
 ### Installation
 
@@ -109,6 +112,9 @@ When you mention the bot in a reply to another message, it will automatically in
 
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
+- `/avatar` - Transform your avatar with themed templates
+- `/connect` - Join your voice channel for speech-to-speech AI interaction
+- `/disconnect` - Disconnect from voice channel
 - `/usage` - Show token usage statistics (elevated users only)
 - `/log` - Get the most recent log file (elevated users only)
 - `/reset` - Reset cycle image usage for a user (elevated users only)
@@ -116,6 +122,27 @@ When you mention the bot in a reply to another message, it will automatically in
 - `/meme` - Generate a nonsensical meme using OpenAI
 
 **Note:** Elevated users are configured via the `ELEVATED_USERS` environment variable (comma-separated Discord user IDs).
+
+### Voice Bot (Speech-to-Speech)
+
+The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime API:
+
+**How to use:**
+1. Join a voice channel in your Discord server
+2. Use `/connect` to have the bot join your voice channel
+3. Speak naturally - the bot will listen and respond with voice
+4. Use `/disconnect` when you're done
+
+**Requirements:**
+- FFmpeg must be installed on the server
+- OpenAI API key with access to the GPT-4o Realtime API
+- Bot needs "Connect" and "Speak" permissions in the voice channel
+
+**Features:**
+- Real-time speech-to-speech conversation
+- Server-side voice activity detection (VAD)
+- Automatic turn-taking for natural conversation flow
+- Works with multiple users in the channel (responds sequentially)
 
 ### Usage Tracking & Tier System
 
@@ -198,7 +225,8 @@ All bot activities, errors, and user interactions are logged for monitoring and 
 |----------|-------------|----------|
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
-| `OPENAI_API_KEY` | Your OpenAI API key (for meme generation) | Yes |
+| `OPENAI_API_KEY` | Your OpenAI API key (for meme generation and voice bot) | Yes |
+| `OPENAI_REALTIME_MODEL` | OpenAI Realtime model for voice bot (default: `gpt-4o-realtime-preview-2024-10-01`) | No |
 | `ELEVATED_USERS` | Comma-separated Discord user IDs with elevated permissions | No |
 
 ### Bot Configuration
@@ -218,6 +246,7 @@ nanobanana/
 ├── bot.py              # Main Discord bot implementation
 ├── config.py           # Configuration management
 ├── model_interface.py  # Unified AI model interface (Gemini, GPT, Chat)
+├── voice_handler.py    # Voice bot and OpenAI Realtime API integration
 ├── image_utils.py      # Image processing utilities
 ├── usage_tracker.py    # User usage tracking system
 ├── log_manager.py      # Logging system management
@@ -235,8 +264,9 @@ The bot uses multiple AI providers:
 - **Text-to-Image**: Creates images from text descriptions
 - **Image-to-Image**: Transforms existing images based on prompts
 
-**OpenAI (meme generation):**
+**OpenAI (meme generation and voice bot):**
 - **Meme Creation**: Generates nonsensical memes using DALL-E 3
+- **Voice Bot**: Full-duplex speech interaction using GPT-4o Realtime API
 
 ## 📝 Examples
 
