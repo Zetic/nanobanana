@@ -204,7 +204,7 @@ class OpenAIRealtimeSession:
     
     async def _send_event(self, event: Dict[str, Any]):
         """Send an event to the OpenAI WebSocket."""
-        if self.websocket and self.websocket.open:
+        if self.websocket and not self.websocket.closed:
             try:
                 await self.websocket.send(json.dumps(event))
             except Exception as e:
@@ -217,7 +217,7 @@ class OpenAIRealtimeSession:
         Args:
             audio_data: Raw PCM audio bytes (24kHz, 16-bit, mono)
         """
-        if not self.websocket or not self.websocket.open:
+        if not self.websocket or self.websocket.closed:
             return
         
         # Encode audio to base64
@@ -232,7 +232,7 @@ class OpenAIRealtimeSession:
     
     async def commit_audio(self):
         """Signal that audio input is complete and request a response."""
-        if not self.websocket or not self.websocket.open:
+        if not self.websocket or self.websocket.closed:
             return
         
         # Commit the audio buffer
