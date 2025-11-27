@@ -12,6 +12,7 @@ GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 
 # OpenAI configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_REALTIME_MODEL = os.getenv('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview-2024-10-01')
 
 # Bot configuration
 COMMAND_PREFIX = '!'
