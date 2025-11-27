@@ -13,7 +13,8 @@ import json
 import logging
 import struct
 import io
-from typing import Optional, Dict, Any, Callable
+from datetime import datetime
+from typing import Optional, Dict, Any, Callable, List, Tuple
 from collections import deque
 
 import discord
@@ -32,6 +33,9 @@ import config
 from model_interface import get_model_generator
 
 logger = logging.getLogger(__name__)
+
+# Default model for voice image generation
+DEFAULT_VOICE_IMAGE_MODEL = "nanobanana"
 
 # OpenAI Realtime API WebSocket URL
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
@@ -429,7 +433,7 @@ class OpenAIRealtimeSession:
         """
         try:
             # Use the existing Gemini model generator
-            generator = get_model_generator("nanobanana")
+            generator = get_model_generator(DEFAULT_VOICE_IMAGE_MODEL)
             
             # Generate the image
             generated_image, text_response, usage_metadata = await generator.generate_image_from_text(prompt)
@@ -757,7 +761,7 @@ class VoiceSession:
         self._audio_source: Optional[StreamingAudioSource] = None
         self._audio_sink: Optional['OpenAIVoiceSink'] = None
         self._listen_task: Optional[asyncio.Task] = None
-        self._pending_images: list = []  # Queue for images to be sent
+        self._pending_images: List[Tuple[Any, str]] = []  # Queue for (image, prompt) tuples
         
     @property
     def guild_id(self) -> int:
@@ -851,7 +855,6 @@ class VoiceSession:
                 img_buffer.seek(0)
                 
                 # Create Discord file
-                from datetime import datetime
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"voice_generated_{timestamp}.png"
                 
