@@ -29,6 +29,7 @@ except ImportError:
     VOICE_RECV_AVAILABLE = False
 
 import config
+from model_interface import get_model_generator
 
 logger = logging.getLogger(__name__)
 
@@ -117,21 +118,24 @@ class AudioResampler:
 class OpenAIRealtimeSession:
     """Manages a WebSocket connection to OpenAI's Realtime API."""
     
-    def __init__(self, on_audio_response: Callable[[bytes], None], on_text_response: Optional[Callable[[str], None]] = None):
+    def __init__(self, on_audio_response: Callable[[bytes], None], on_text_response: Optional[Callable[[str], None]] = None, on_image_generated: Optional[Callable[[Any, str], None]] = None):
         """
         Initialize the OpenAI Realtime session.
         
         Args:
             on_audio_response: Callback function to handle audio response data
             on_text_response: Optional callback for text transcription responses
+            on_image_generated: Optional callback when an image is generated (image, prompt)
         """
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.on_audio_response = on_audio_response
         self.on_text_response = on_text_response
+        self.on_image_generated = on_image_generated
         self._running = False
         self._receive_task: Optional[asyncio.Task] = None
         self._audio_buffer = bytearray()
         self._response_in_progress = False
+        self._pending_function_calls: Dict[str, Dict[str, Any]] = {}  # Track pending function calls
         
     async def connect(self) -> tuple[bool, Optional[str]]:
         """
@@ -192,7 +196,7 @@ class OpenAIRealtimeSession:
             "type": "session.update",
             "session": {
                 "modalities": ["text", "audio"],
-                "instructions": "You are a helpful voice assistant in a Discord voice chat. Keep responses concise and conversational. Be friendly and engaging.",
+                "instructions": "You are a helpful voice assistant in a Discord voice chat called ZPT. Keep responses concise and conversational. Be friendly and engaging. You have the ability to generate images when users request them - use the generate_image tool when a user asks you to create, draw, make, or generate an image of something.",
                 "voice": "alloy",
                 "input_audio_format": "pcm16",
                 "output_audio_format": "pcm16",
@@ -204,12 +208,30 @@ class OpenAIRealtimeSession:
                     "threshold": 0.5,
                     "prefix_padding_ms": 300,
                     "silence_duration_ms": 500
-                }
+                },
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "generate_image",
+                        "description": "Generate an image based on the user's description. Use this when a user asks to create, draw, make, generate, or design an image, picture, artwork, or visual content.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {
+                                    "type": "string",
+                                    "description": "A detailed description of the image to generate. Be descriptive and include style, colors, subjects, and any specific details the user mentioned."
+                                }
+                            },
+                            "required": ["prompt"]
+                        }
+                    }
+                ],
+                "tool_choice": "auto"
             }
         }
         
         await self._send_event(config_event)
-        logger.debug("Sent session configuration to OpenAI")
+        logger.debug("Sent session configuration to OpenAI with image generation tool")
     
     async def _send_event(self, event: Dict[str, Any]):
         """Send an event to the OpenAI WebSocket."""
@@ -337,6 +359,10 @@ class OpenAIRealtimeSession:
             elif event_type == "input_audio_buffer.speech_stopped":
                 logger.info("🔇 Speech ended - processing user input")
                 
+            elif event_type == "response.function_call_arguments.done":
+                # Function call arguments are complete - execute the function
+                await self._handle_function_call(event)
+                
             elif event_type == "response.done":
                 logger.info("✅ Response generation complete - finished speaking")
                 self._response_in_progress = False
@@ -348,6 +374,114 @@ class OpenAIRealtimeSession:
             logger.error(f"Failed to parse OpenAI message: {e}")
         except Exception as e:
             logger.error(f"Error handling OpenAI message: {e}")
+    
+    async def _handle_function_call(self, event: Dict[str, Any]):
+        """
+        Handle a function call from OpenAI.
+        
+        Args:
+            event: The function call arguments done event
+        """
+        try:
+            call_id = event.get("call_id")
+            name = event.get("name")
+            arguments_str = event.get("arguments", "{}")
+            
+            if not call_id:
+                logger.error("Function call missing call_id")
+                return
+            
+            logger.info(f"🔧 Function call received: {name} (call_id: {call_id})")
+            
+            # Parse arguments
+            try:
+                arguments = json.loads(arguments_str)
+            except json.JSONDecodeError:
+                arguments = {}
+                logger.warning(f"Failed to parse function arguments: {arguments_str}")
+            
+            # Handle generate_image function
+            if name == "generate_image":
+                prompt = arguments.get("prompt", "")
+                if prompt:
+                    logger.info(f"🎨 Generating image with prompt: {prompt}")
+                    await self._execute_image_generation(call_id, prompt)
+                else:
+                    # No prompt provided, send error response
+                    await self._send_function_output(call_id, "Error: No prompt provided for image generation.")
+            else:
+                # Unknown function
+                logger.warning(f"Unknown function called: {name}")
+                await self._send_function_output(call_id, f"Error: Unknown function '{name}'")
+                
+        except Exception as e:
+            logger.error(f"Error handling function call: {e}")
+            if call_id:
+                await self._send_function_output(call_id, f"Error executing function: {str(e)}")
+    
+    async def _execute_image_generation(self, call_id: str, prompt: str):
+        """
+        Execute image generation using the existing Gemini model.
+        
+        Args:
+            call_id: The function call ID
+            prompt: The image generation prompt
+        """
+        try:
+            # Use the existing Gemini model generator
+            generator = get_model_generator("nanobanana")
+            
+            # Generate the image
+            generated_image, text_response, usage_metadata = await generator.generate_image_from_text(prompt)
+            
+            if generated_image:
+                logger.info(f"✅ Image generated successfully for prompt: {prompt}")
+                
+                # Notify callback that image was generated
+                if self.on_image_generated:
+                    self.on_image_generated(generated_image, prompt)
+                
+                # Send success response back to OpenAI
+                await self._send_function_output(
+                    call_id, 
+                    f"Successfully generated image based on the prompt: '{prompt}'. The image has been sent to the Discord channel."
+                )
+            else:
+                logger.warning(f"Image generation failed for prompt: {prompt}")
+                error_msg = text_response if text_response else "Failed to generate image. Please try again with a different description."
+                await self._send_function_output(call_id, error_msg)
+                
+        except Exception as e:
+            logger.error(f"Error during image generation: {e}")
+            await self._send_function_output(call_id, f"Error generating image: {str(e)}")
+    
+    async def _send_function_output(self, call_id: str, output: str):
+        """
+        Send function call output back to OpenAI and request continuation.
+        
+        Args:
+            call_id: The function call ID
+            output: The function output as a string
+        """
+        try:
+            # Send the function output
+            output_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output
+                }
+            }
+            await self._send_event(output_event)
+            logger.debug(f"Sent function output for call_id: {call_id}")
+            
+            # Request model to continue responding
+            await self._send_event({"type": "response.create"})
+            logger.debug("Requested response continuation after function call")
+            
+        except Exception as e:
+            logger.error(f"Error sending function output: {e}")
     
     async def disconnect(self):
         """Close the WebSocket connection."""
@@ -389,12 +523,13 @@ class VoiceConnectionManager:
         """Check if a guild has an active voice session."""
         return guild_id in self._sessions
     
-    async def connect(self, voice_channel: discord.VoiceChannel) -> tuple[Optional['VoiceSession'], Optional[str]]:
+    async def connect(self, voice_channel: discord.VoiceChannel, text_channel: Optional[discord.TextChannel] = None) -> tuple[Optional['VoiceSession'], Optional[str]]:
         """
         Connect to a voice channel and start a new voice session.
         
         Args:
             voice_channel: The Discord voice channel to join
+            text_channel: Optional text channel to post generated images to
             
         Returns:
             Tuple of (VoiceSession, None) if successful, or (None, error_reason) on failure
@@ -420,8 +555,8 @@ class VoiceConnectionManager:
             
             logger.info(f"✅ Successfully connected to Discord voice channel '{voice_channel.name}'")
             
-            # Create voice session
-            session = VoiceSession(voice_client, self)
+            # Create voice session with text channel for image posting
+            session = VoiceSession(voice_client, self, text_channel)
             self._sessions[guild_id] = session
             
             # Start the session (connects to OpenAI and starts audio processing)
@@ -613,14 +748,16 @@ class VoiceSession:
     Handles receiving audio from Discord and sending responses back.
     """
     
-    def __init__(self, voice_client: VoiceClient, manager: VoiceConnectionManager):
+    def __init__(self, voice_client: VoiceClient, manager: VoiceConnectionManager, text_channel: Optional[discord.TextChannel] = None):
         self.voice_client = voice_client
         self.manager = manager
+        self.text_channel = text_channel  # Channel to post generated images to
         self.openai_session: Optional[OpenAIRealtimeSession] = None
         self._running = False
         self._audio_source: Optional[StreamingAudioSource] = None
         self._audio_sink: Optional['OpenAIVoiceSink'] = None
         self._listen_task: Optional[asyncio.Task] = None
+        self._pending_images: list = []  # Queue for images to be sent
         
     @property
     def guild_id(self) -> int:
@@ -643,9 +780,10 @@ class VoiceSession:
         # Create audio source for playback
         self._audio_source = StreamingAudioSource()
         
-        # Create OpenAI session with callback for audio responses
+        # Create OpenAI session with callback for audio responses and image generation
         self.openai_session = OpenAIRealtimeSession(
-            on_audio_response=self._handle_openai_audio
+            on_audio_response=self._handle_openai_audio,
+            on_image_generated=self._handle_image_generated
         )
         
         # Connect to OpenAI
@@ -686,6 +824,46 @@ class VoiceSession:
         # Add to playback queue
         if self._audio_source:
             self._audio_source.add_audio(discord_audio)
+    
+    def _handle_image_generated(self, image: Any, prompt: str):
+        """
+        Handle an image that was generated by the voice assistant.
+        Queues the image for sending to the text channel.
+        
+        Args:
+            image: The generated PIL Image
+            prompt: The prompt used to generate the image
+        """
+        if image and self.text_channel:
+            # Queue the image for sending (will be processed in the event loop)
+            self._pending_images.append((image, prompt))
+            # Schedule the async send operation
+            asyncio.create_task(self._send_pending_images())
+    
+    async def _send_pending_images(self):
+        """Send any pending generated images to the text channel."""
+        while self._pending_images:
+            image, prompt = self._pending_images.pop(0)
+            try:
+                # Save image to buffer
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                
+                # Create Discord file
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"voice_generated_{timestamp}.png"
+                
+                # Send to text channel
+                await self.text_channel.send(
+                    content=f"🎨 **Voice-generated image**\n*Prompt: {prompt}*",
+                    file=discord.File(img_buffer, filename=filename)
+                )
+                logger.info(f"📤 Sent generated image to text channel: {prompt[:50]}...")
+                
+            except Exception as e:
+                logger.error(f"Error sending generated image to channel: {e}")
     
     async def _listen_loop(self):
         """
