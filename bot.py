@@ -999,7 +999,7 @@ async def connect_slash(interaction: discord.Interaction):
         await interaction.response.defer()
         
         # Connect to voice channel and start session
-        session = await voice_manager.connect(voice_channel)
+        session, error_reason = await voice_manager.connect(voice_channel)
         
         if session:
             await interaction.followup.send(
@@ -1009,10 +1009,16 @@ async def connect_slash(interaction: discord.Interaction):
             )
             logger.info(f"User {interaction.user.id} started voice session in channel {voice_channel.id}")
         else:
-            await interaction.followup.send(
-                "❌ Failed to connect to the voice channel. Please try again later.",
-                ephemeral=True
-            )
+            # Log detailed error and provide user feedback
+            logger.error(f"Voice connection failed for user {interaction.user.id} in channel {voice_channel.id}: {error_reason}")
+            
+            # Create user-friendly error message with debug info
+            user_message = "❌ Failed to connect to the voice channel."
+            if error_reason:
+                user_message += f"\n\n**Reason:** {error_reason}"
+            user_message += "\n\nPlease try again later or contact an administrator if the issue persists."
+            
+            await interaction.followup.send(user_message, ephemeral=True)
             
     except Exception as e:
         logger.error(f"Error in connect command: {e}")
