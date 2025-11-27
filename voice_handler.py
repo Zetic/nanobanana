@@ -124,16 +124,17 @@ class OpenAIRealtimeSession:
         self._audio_buffer = bytearray()
         self._response_in_progress = False
         
-    async def connect(self) -> bool:
+    async def connect(self) -> tuple[bool, Optional[str]]:
         """
         Establish WebSocket connection to OpenAI Realtime API.
         
         Returns:
-            True if connection successful, False otherwise
+            Tuple of (True, None) if connection successful, or (False, error_reason) on failure
         """
         if not config.OPENAI_API_KEY:
-            logger.error("OPENAI_API_KEY not configured")
-            return False
+            error_msg = "OPENAI_API_KEY not configured"
+            logger.error(error_msg)
+            return False, error_msg
         
         try:
             # Build URL with model parameter
@@ -161,14 +162,20 @@ class OpenAIRealtimeSession:
             self._receive_task = asyncio.create_task(self._receive_loop())
             
             logger.info("Connected to OpenAI Realtime API")
-            return True
+            return True, None
             
         except websockets.exceptions.InvalidStatusCode as e:
-            logger.error(f"Failed to connect to OpenAI Realtime API: Invalid status code {e.status_code}")
-            return False
+            error_msg = f"OpenAI API returned invalid status code {e.status_code}"
+            logger.error(f"Failed to connect to OpenAI Realtime API: {error_msg}")
+            return False, error_msg
+        except websockets.exceptions.WebSocketException as e:
+            error_msg = f"WebSocket connection error: {type(e).__name__}: {e}"
+            logger.error(f"Failed to connect to OpenAI Realtime API: {error_msg}")
+            return False, error_msg
         except Exception as e:
-            logger.error(f"Failed to connect to OpenAI Realtime API: {e}")
-            return False
+            error_msg = f"Connection error: {type(e).__name__}: {e}"
+            logger.error(f"Failed to connect to OpenAI Realtime API: {error_msg}")
+            return False, error_msg
     
     async def _configure_session(self):
         """Send session configuration to OpenAI."""
@@ -363,7 +370,7 @@ class VoiceConnectionManager:
         """Check if a guild has an active voice session."""
         return guild_id in self._sessions
     
-    async def connect(self, voice_channel: discord.VoiceChannel) -> Optional['VoiceSession']:
+    async def connect(self, voice_channel: discord.VoiceChannel) -> tuple[Optional['VoiceSession'], Optional[str]]:
         """
         Connect to a voice channel and start a new voice session.
         
@@ -371,35 +378,48 @@ class VoiceConnectionManager:
             voice_channel: The Discord voice channel to join
             
         Returns:
-            VoiceSession if successful, None otherwise
+            Tuple of (VoiceSession, None) if successful, or (None, error_reason) on failure
         """
         guild_id = voice_channel.guild.id
         
         # Check if already connected
         if guild_id in self._sessions:
             logger.warning(f"Already connected to a voice channel in guild {guild_id}")
-            return self._sessions[guild_id]
+            return self._sessions[guild_id], None
         
         try:
             # Connect to voice channel
+            logger.info(f"Connecting to voice channel {voice_channel.id} in guild {guild_id}")
             voice_client = await voice_channel.connect()
+            logger.info(f"Successfully connected to Discord voice channel {voice_channel.id}")
             
             # Create voice session
             session = VoiceSession(voice_client, self)
             self._sessions[guild_id] = session
             
             # Start the session (connects to OpenAI and starts audio processing)
-            if await session.start():
+            success, error_reason = await session.start()
+            if success:
                 logger.info(f"Voice session started in guild {guild_id}")
-                return session
+                return session, None
             else:
                 # Failed to start session, cleanup
+                logger.error(f"Voice session failed to start in guild {guild_id}: {error_reason}")
                 await self.disconnect(guild_id)
-                return None
+                return None, error_reason
                 
+        except discord.ClientException as e:
+            error_msg = f"Discord client error while connecting to voice channel: {e}"
+            logger.error(error_msg)
+            return None, error_msg
+        except discord.opus.OpusNotLoaded as e:
+            error_msg = f"Opus library not loaded (required for voice): {e}"
+            logger.error(error_msg)
+            return None, error_msg
         except Exception as e:
-            logger.error(f"Failed to connect to voice channel: {e}")
-            return None
+            error_msg = f"Failed to connect to voice channel: {type(e).__name__}: {e}"
+            logger.error(error_msg)
+            return None, error_msg
     
     async def disconnect(self, guild_id: int) -> bool:
         """
@@ -503,13 +523,13 @@ class VoiceSession:
         """Get the voice channel for this session."""
         return self.voice_client.channel
         
-    async def start(self) -> bool:
+    async def start(self) -> tuple[bool, Optional[str]]:
         """
         Start the voice session.
         Connects to OpenAI and begins audio processing.
         
         Returns:
-            True if started successfully, False otherwise
+            Tuple of (True, None) if started successfully, or (False, error_reason) on failure
         """
         # Create audio source for playback
         self._audio_source = StreamingAudioSource()
@@ -520,9 +540,10 @@ class VoiceSession:
         )
         
         # Connect to OpenAI
-        if not await self.openai_session.connect():
-            logger.error("Failed to connect to OpenAI Realtime API")
-            return False
+        success, error_reason = await self.openai_session.connect()
+        if not success:
+            logger.error(f"Failed to connect to OpenAI Realtime API: {error_reason}")
+            return False, error_reason
         
         self._running = True
         
@@ -530,9 +551,14 @@ class VoiceSession:
         self._listen_task = asyncio.create_task(self._listen_loop())
         
         # Start playing audio source
-        self.voice_client.play(self._audio_source)
+        try:
+            self.voice_client.play(self._audio_source)
+        except Exception as e:
+            error_msg = f"Failed to start audio playback: {type(e).__name__}: {e}"
+            logger.error(error_msg)
+            return False, error_msg
         
-        return True
+        return True, None
     
     def _handle_openai_audio(self, audio_data: bytes):
         """
