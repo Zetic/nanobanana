@@ -278,7 +278,11 @@ class OpenAIRealtimeSession:
                 logger.info("OpenAI Realtime session created")
                 
             elif event_type == "session.updated":
-                logger.debug("OpenAI Realtime session updated")
+                logger.info("⚙️ OpenAI Realtime session configured successfully")
+                
+            elif event_type == "response.created":
+                logger.info("🤔 Bot is generating a response...")
+                self._response_in_progress = True
                 
             elif event_type == "response.audio.delta":
                 # Received audio chunk from OpenAI
@@ -298,7 +302,7 @@ class OpenAIRealtimeSession:
                 if self._audio_buffer:
                     self.on_audio_response(bytes(self._audio_buffer))
                     self._audio_buffer.clear()
-                logger.debug("Audio response complete")
+                logger.info("🔊 Audio response complete - sent to Discord")
                 
             elif event_type == "response.audio_transcript.delta":
                 # Received text transcription of bot's response
@@ -307,20 +311,26 @@ class OpenAIRealtimeSession:
                     if text:
                         self.on_text_response(text)
                         
+            elif event_type == "response.audio_transcript.done":
+                # Full transcription of bot's response
+                transcript = event.get("transcript", "")
+                if transcript:
+                    logger.info(f"🗣️ Bot said: \"{transcript}\"")
+                        
             elif event_type == "conversation.item.input_audio_transcription.completed":
                 # User's speech was transcribed
                 transcript = event.get("transcript", "")
                 if transcript:
-                    logger.info(f"User said: {transcript}")
+                    logger.info(f"📝 User said: \"{transcript}\"")
                     
             elif event_type == "input_audio_buffer.speech_started":
-                logger.debug("Speech detected")
+                logger.info("🎤 Speech detected - listening to user")
                 
             elif event_type == "input_audio_buffer.speech_stopped":
-                logger.debug("Speech ended")
+                logger.info("🔇 Speech ended - processing user input")
                 
             elif event_type == "response.done":
-                logger.debug("Response generation complete")
+                logger.info("✅ Response generation complete - finished speaking")
                 self._response_in_progress = False
                 
             elif event_type == "rate_limits.updated":
@@ -390,36 +400,37 @@ class VoiceConnectionManager:
         
         try:
             # Connect to voice channel
-            logger.info(f"Connecting to voice channel {voice_channel.id} in guild {guild_id}")
+            logger.info(f"🎙️ Connecting to voice channel '{voice_channel.name}' (ID: {voice_channel.id}) in guild {guild_id}")
             voice_client = await voice_channel.connect()
-            logger.info(f"Successfully connected to Discord voice channel {voice_channel.id}")
+            logger.info(f"✅ Successfully connected to Discord voice channel '{voice_channel.name}'")
             
             # Create voice session
             session = VoiceSession(voice_client, self)
             self._sessions[guild_id] = session
             
             # Start the session (connects to OpenAI and starts audio processing)
+            logger.info("🚀 Starting voice session and OpenAI Realtime API connection...")
             success, error_reason = await session.start()
             if success:
-                logger.info(f"Voice session started in guild {guild_id}")
+                logger.info(f"✅ Voice session fully started in guild {guild_id}")
                 return session, None
             else:
                 # Failed to start session, cleanup
-                logger.error(f"Voice session failed to start in guild {guild_id}: {error_reason}")
+                logger.error(f"❌ Voice session failed to start in guild {guild_id}: {error_reason}")
                 await self.disconnect(guild_id)
                 return None, error_reason
                 
         except discord.ClientException as e:
             error_msg = f"Discord client error: {e}"
-            logger.error(error_msg)
+            logger.error(f"❌ {error_msg}")
             return None, error_msg
         except discord.opus.OpusNotLoaded as e:
             error_msg = f"Opus library not loaded (required for voice): {e}"
-            logger.error(error_msg)
+            logger.error(f"❌ {error_msg}")
             return None, error_msg
         except Exception as e:
             error_msg = f"Voice channel connection error: {type(e).__name__}: {e}"
-            logger.error(error_msg)
+            logger.error(f"❌ {error_msg}")
             return None, error_msg
     
     async def disconnect(self, guild_id: int) -> bool:
@@ -541,11 +552,13 @@ class VoiceSession:
         )
         
         # Connect to OpenAI
+        logger.info("🔗 Connecting to OpenAI Realtime API...")
         success, error_reason = await self.openai_session.connect()
         if not success:
-            logger.error(f"Failed to connect to OpenAI Realtime API: {error_reason}")
+            logger.error(f"❌ Failed to connect to OpenAI Realtime API: {error_reason}")
             return False, error_reason
         
+        logger.info("✅ Successfully connected to OpenAI Realtime API")
         self._running = True
         
         # Start listening for Discord audio
@@ -554,9 +567,10 @@ class VoiceSession:
         # Start playing audio source
         try:
             self.voice_client.play(self._audio_source)
+            logger.info("🔊 Audio playback initialized - ready to play bot responses")
         except Exception as e:
             error_msg = f"Audio playback error: {type(e).__name__}: {e}"
-            logger.error(error_msg)
+            logger.error(f"❌ {error_msg}")
             return False, error_msg
         
         return True, None
@@ -595,8 +609,10 @@ class VoiceSession:
         audio input once voice receive is implemented.
         """
         try:
-            logger.info("Voice session active - bot can play audio responses")
-            logger.info("Note: Voice input capture requires discord-ext-voice-recv extension")
+            logger.info("🎧 Voice session active - connected to OpenAI Realtime API")
+            logger.warning("⚠️ Voice INPUT is not yet implemented - bot can only PLAY audio, not LISTEN")
+            logger.warning("⚠️ Voice input capture requires discord-ext-voice-recv extension")
+            logger.info("📋 To enable voice input: pip install discord-ext-voice-recv")
             
             # Keep the session alive
             # When voice receive is implemented, this loop would:
@@ -614,6 +630,7 @@ class VoiceSession:
     
     async def stop(self):
         """Stop the voice session and cleanup."""
+        logger.info(f"🔌 Stopping voice session in guild {self.guild_id}...")
         self._running = False
         
         # Cancel listen task
@@ -627,6 +644,7 @@ class VoiceSession:
         
         # Disconnect from OpenAI
         if self.openai_session:
+            logger.info("🔗 Disconnecting from OpenAI Realtime API...")
             await self.openai_session.disconnect()
             self.openai_session = None
         
@@ -643,7 +661,7 @@ class VoiceSession:
         if self.voice_client.is_connected():
             await self.voice_client.disconnect()
         
-        logger.info(f"Voice session stopped in guild {self.guild_id}")
+        logger.info(f"👋 Voice session stopped in guild {self.guild_id}")
 
 
 # Global voice connection manager instance
