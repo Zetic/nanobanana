@@ -257,7 +257,7 @@ All bot activities, errors, and user interactions are logged for monitoring and 
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
 | `OPENAI_API_KEY` | Your OpenAI API key (for meme generation and voice bot) | Yes |
-| `OPENAI_REALTIME_MODEL` | OpenAI Realtime model for voice bot (default: `gpt-4o-realtime-preview-2024-10-01`) | No |
+| `OPENAI_REALTIME_MODEL` | OpenAI Realtime model for voice bot (default: `gpt-4o-realtime-preview-2024-12-17`) | No |
 | `ELEVATED_USERS` | Comma-separated Discord user IDs with elevated permissions | No |
 
 ### Bot Configuration

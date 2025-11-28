@@ -409,22 +409,19 @@ class OpenAIRealtimeSession:
         await self._send_event(event)
     
     async def commit_audio(self):
-        """Signal that audio input is complete and request a response."""
+        """Signal that audio input is complete.
+        
+        Note: Response creation is handled automatically by server VAD when
+        turn_detection.create_response is set to True in session configuration.
+        Manual response.create calls here would conflict with VAD auto-response.
+        """
         if not self.websocket or self.websocket.state != WebSocketState.OPEN:
             return
         
-        logger.debug("[DEBUG] Committing audio buffer and requesting response")
+        logger.debug("[DEBUG] Committing audio buffer (VAD will auto-create response)")
         
-        # Commit the audio buffer
+        # Commit the audio buffer - VAD handles response creation automatically
         await self._send_event({"type": "input_audio_buffer.commit"})
-        
-        # Create a response with explicit modalities to ensure audio output
-        await self._send_event({
-            "type": "response.create",
-            "response": {
-                "modalities": ["text", "audio"]
-            }
-        })
     
     async def _receive_loop(self):
         """Main loop for receiving messages from OpenAI."""
