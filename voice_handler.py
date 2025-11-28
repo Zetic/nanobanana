@@ -347,7 +347,7 @@ class OpenAIRealtimeSession:
                     "threshold": 0.3,
                     "prefix_padding_ms": 200,
                     "silence_duration_ms": 300,
-                    "create_response": True,
+                    "create_response": False,
                     "interrupt_response": True
                 },
                 "tools": [
@@ -411,16 +411,16 @@ class OpenAIRealtimeSession:
     async def commit_audio(self):
         """Signal that audio input is complete.
         
-        Note: Response creation is handled automatically by server VAD when
-        turn_detection.create_response is set to True in session configuration.
-        Manual response.create calls here would conflict with VAD auto-response.
+        Note: With server_vad and create_response set to False, response creation
+        is handled explicitly when speech_stopped event is received, not here.
+        This method commits the audio buffer but does not trigger a response.
         """
         if not self.websocket or self.websocket.state != WebSocketState.OPEN:
             return
         
-        logger.debug("[DEBUG] Committing audio buffer (VAD will auto-create response)")
+        logger.debug("[DEBUG] Committing audio buffer (response creation handled on speech_stopped)")
         
-        # Commit the audio buffer - VAD handles response creation automatically
+        # Commit the audio buffer - response creation handled in speech_stopped handler
         await self._send_event({"type": "input_audio_buffer.commit"})
     
     async def _receive_loop(self):
@@ -523,6 +523,14 @@ class OpenAIRealtimeSession:
             elif event_type == "input_audio_buffer.speech_stopped":
                 logger.info("🔇 Speech ended - processing user input")
                 logger.debug(f"[DEBUG] Speech processing started at {datetime.now().isoformat()}")
+                # Explicitly request a response since create_response is disabled
+                # This ensures responses are generated after VAD detects speech end
+                await self._send_event({
+                    "type": "response.create",
+                    "response": {
+                        "modalities": ["text", "audio"]
+                    }
+                })
                 
             elif event_type == "response.function_call_arguments.done":
                 # Function call arguments are complete - execute the function
