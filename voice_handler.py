@@ -245,7 +245,7 @@ class AudioResampler:
 class OpenAIRealtimeSession:
     """Manages a WebSocket connection to OpenAI's Realtime API."""
     
-    def __init__(self, on_audio_response: Callable[[bytes], None], on_text_response: Optional[Callable[[str], None]] = None, on_image_generated: Optional[Callable[[Any, str], None]] = None, on_response_complete: Optional[Callable[[], None]] = None):
+    def __init__(self, on_audio_response: Callable[[bytes], None], on_text_response: Optional[Callable[[str], None]] = None, on_image_generated: Optional[Callable[[Any, str], None]] = None):
         """
         Initialize the OpenAI Realtime session.
         
@@ -253,13 +253,11 @@ class OpenAIRealtimeSession:
             on_audio_response: Callback function to handle audio response data
             on_text_response: Optional callback for text transcription responses
             on_image_generated: Optional callback when an image is generated (image, prompt)
-            on_response_complete: Optional callback when a response is complete (for resetting silence detection)
         """
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.on_audio_response = on_audio_response
         self.on_text_response = on_text_response
         self.on_image_generated = on_image_generated
-        self.on_response_complete = on_response_complete
         self._running = False
         self._receive_task: Optional[asyncio.Task] = None
         self._audio_buffer = bytearray()
@@ -348,7 +346,7 @@ class OpenAIRealtimeSession:
                     "type": "server_vad",
                     "threshold": 0.5,
                     "prefix_padding_ms": 300,
-                    "silence_duration_ms": 1000
+                    "silence_duration_ms": 500
                 },
                 "tools": [
                     {
@@ -531,10 +529,6 @@ class OpenAIRealtimeSession:
                 logger.info("✅ Response generation complete - finished speaking")
                 self._response_in_progress = False
                 logger.debug(f"[DEBUG] Response complete. Current session stats: {self._stats.get_summary()}")
-                
-                # Notify callback that response is complete (for client-side silence detection reset)
-                if self.on_response_complete:
-                    self.on_response_complete()
                 
             elif event_type == "rate_limits.updated":
                 logger.debug(f"[DEBUG] Rate limits updated: {event.get('rate_limits', [])}")
@@ -876,17 +870,7 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
     """
     Audio sink that receives voice data from Discord and streams it to OpenAI.
     Implements the discord-ext-voice-recv AudioSink interface.
-    
-    Features client-side silence detection to properly trigger responses:
-    - Detects when audio energy drops below threshold (silence)
-    - After 1 second of silence, commits the audio buffer and triggers a response
-    - Keeps listening until new audio input is received before generating another response
     """
-    
-    # Silence detection constants
-    SILENCE_THRESHOLD = 500  # RMS threshold below which audio is considered silence
-    SILENCE_DURATION_MS = 1000  # 1 second of silence before triggering response
-    SAMPLE_RATE_24K = 24000  # OpenAI sample rate after resampling
     
     def __init__(self, voice_session: 'VoiceSession'):
         """
@@ -903,54 +887,9 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         # Buffer threshold: ~100ms of audio at 24kHz mono (2400 samples * 2 bytes)
         self._buffer_threshold = 4800
         
-        # Client-side silence detection state
-        self._silence_start_time: Optional[float] = None  # When silence started
-        self._has_received_speech = False  # Whether we've received any speech since last response
-        self._response_pending = False  # Whether we're waiting for a response to complete
-        self._last_audio_time: Optional[float] = None  # Last time we received non-silent audio
-        
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
         return False
-    
-    def _calculate_rms(self, audio_data: bytes) -> float:
-        """
-        Calculate the RMS (root mean square) energy level of audio data.
-        
-        Args:
-            audio_data: Raw PCM audio bytes (16-bit signed integers)
-            
-        Returns:
-            RMS energy level as a float
-        """
-        if not audio_data:
-            return 0.0
-        
-        # Need at least 2 bytes for one 16-bit sample
-        num_samples = len(audio_data) // 2
-        if num_samples == 0:
-            return 0.0
-        
-        samples = struct.unpack(f'<{num_samples}h', audio_data)
-        
-        # Calculate RMS
-        sum_squares = sum(sample * sample for sample in samples)
-        rms = (sum_squares / num_samples) ** 0.5
-        
-        return rms
-    
-    def _is_silence(self, audio_data: bytes) -> bool:
-        """
-        Check if audio data is silence based on RMS energy level.
-        
-        Args:
-            audio_data: Raw PCM audio bytes
-            
-        Returns:
-            True if audio is considered silence, False otherwise
-        """
-        rms = self._calculate_rms(audio_data)
-        return rms < self.SILENCE_THRESHOLD
     
     def write(self, user: discord.User, data: 'voice_recv.VoiceData'):
         """
@@ -958,11 +897,6 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         
         This method is called by discord-ext-voice-recv when audio is received.
         The audio is in Discord format (48kHz, 16-bit, stereo PCM).
-        
-        Implements client-side silence detection:
-        - If audio contains speech, send it to OpenAI and mark that we have speech
-        - If audio is silence, track how long silence has lasted
-        - After 1 second of silence (and if we have speech), commit buffer and trigger response
         
         Args:
             user: The Discord user who is speaking
@@ -977,90 +911,25 @@ class OpenAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
             
             if pcm_data:
                 # Resample from Discord format (48kHz stereo) to OpenAI format (24kHz mono)
+                # Using the static method directly for efficiency
                 resampled_audio = AudioResampler.resample_48k_stereo_to_24k_mono(pcm_data)
                 
                 if resampled_audio:
-                    current_time = time.time()
-                    is_silent = self._is_silence(resampled_audio)
+                    # Add to buffer
+                    self._audio_buffer.extend(resampled_audio)
                     
-                    if is_silent:
-                        # Track silence duration
-                        if self._silence_start_time is None:
-                            self._silence_start_time = current_time
-                            logger.debug("[DEBUG] Silence detected, starting silence timer")
+                    # Send when buffer reaches threshold to reduce cross-thread calls
+                    if len(self._audio_buffer) >= self._buffer_threshold:
+                        audio_to_send = bytes(self._audio_buffer)
+                        self._audio_buffer.clear()
                         
-                        silence_duration_ms = (current_time - self._silence_start_time) * 1000
-                        
-                        # Check if we should trigger a response (1 second of silence after speech)
-                        if (self._has_received_speech and 
-                            not self._response_pending and 
-                            silence_duration_ms >= self.SILENCE_DURATION_MS):
-                            
-                            logger.info(f"🔇 Client-side silence detected for {silence_duration_ms:.0f}ms - triggering response")
-                            
-                            # Set response pending FIRST to prevent race conditions
-                            # (multiple audio chunks arriving simultaneously)
-                            self._response_pending = True
-                            self._has_received_speech = False
-                            self._silence_start_time = None
-                            
-                            # Flush any remaining audio in buffer
-                            if self._audio_buffer:
-                                audio_to_send = bytes(self._audio_buffer)
-                                self._audio_buffer.clear()
-                                asyncio.run_coroutine_threadsafe(
-                                    self._voice_session.openai_session.send_audio(audio_to_send),
-                                    self._loop
-                                )
-                            
-                            # Commit audio and request response
-                            asyncio.run_coroutine_threadsafe(
-                                self._voice_session.openai_session.commit_audio(),
-                                self._loop
-                            )
-                            
-                        # Don't send pure silence to OpenAI - this can confuse the VAD
-                        # Only send if we're still in an active speech segment
-                        return
-                    else:
-                        # Non-silent audio detected
-                        if self._silence_start_time is not None:
-                            silence_duration = (current_time - self._silence_start_time) * 1000
-                            logger.debug(f"[DEBUG] Speech resumed after {silence_duration:.0f}ms of silence")
-                        
-                        self._silence_start_time = None
-                        self._has_received_speech = True
-                        self._last_audio_time = current_time
-                        
-                        # If we were waiting for a response and new speech comes in,
-                        # we can start collecting new input
-                        if self._response_pending:
-                            logger.debug("[DEBUG] New speech detected while response was pending")
-                            # We'll let this new speech start accumulating for the next turn
-                        
-                        # Add to buffer for sending
-                        self._audio_buffer.extend(resampled_audio)
-                        
-                        # Send when buffer reaches threshold to reduce cross-thread calls
-                        if len(self._audio_buffer) >= self._buffer_threshold:
-                            audio_to_send = bytes(self._audio_buffer)
-                            self._audio_buffer.clear()
-                            
-                            # Schedule the async send_audio call in the event loop
-                            asyncio.run_coroutine_threadsafe(
-                                self._voice_session.openai_session.send_audio(audio_to_send),
-                                self._loop
-                            )
+                        # Schedule the async send_audio call in the event loop
+                        asyncio.run_coroutine_threadsafe(
+                            self._voice_session.openai_session.send_audio(audio_to_send),
+                            self._loop
+                        )
         except Exception as e:
             logger.error(f"Error processing voice data from {user}: {e}")
-    
-    def on_response_complete(self):
-        """
-        Called when OpenAI finishes generating a response.
-        Resets the response pending state so we can accept new input.
-        """
-        self._response_pending = False
-        logger.debug("[DEBUG] Response complete, ready for new input")
     
     def cleanup(self):
         """Clean up the audio sink and flush any remaining audio."""
@@ -1123,8 +992,7 @@ class VoiceSession:
         # Create OpenAI session with callback for audio responses and image generation
         self.openai_session = OpenAIRealtimeSession(
             on_audio_response=self._handle_openai_audio,
-            on_image_generated=self._handle_image_generated,
-            on_response_complete=self._handle_response_complete
+            on_image_generated=self._handle_image_generated
         )
         logger.debug("[DEBUG] OpenAI session instance created")
         timer.checkpoint("Session instances created")
@@ -1176,14 +1044,6 @@ class VoiceSession:
         # Add to playback queue
         if self._audio_source:
             self._audio_source.add_audio(discord_audio)
-    
-    def _handle_response_complete(self):
-        """
-        Handle when OpenAI finishes generating a response.
-        Notifies the audio sink to reset its silence detection state.
-        """
-        if self._audio_sink:
-            self._audio_sink.on_response_complete()
     
     def _handle_image_generated(self, image: Any, prompt: str):
         """
