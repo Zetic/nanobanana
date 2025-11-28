@@ -418,8 +418,13 @@ class OpenAIRealtimeSession:
         # Commit the audio buffer
         await self._send_event({"type": "input_audio_buffer.commit"})
         
-        # Create a response
-        await self._send_event({"type": "response.create"})
+        # Create a response with explicit modalities to ensure audio output
+        await self._send_event({
+            "type": "response.create",
+            "response": {
+                "modalities": ["text", "audio"]
+            }
+        })
     
     async def _receive_loop(self):
         """Main loop for receiving messages from OpenAI."""
@@ -667,8 +672,13 @@ class OpenAIRealtimeSession:
             await self._send_event(output_event)
             logger.debug(f"Sent function output for call_id: {call_id}")
             
-            # Request model to continue responding
-            await self._send_event({"type": "response.create"})
+            # Request model to continue responding with explicit modalities to ensure audio output
+            await self._send_event({
+                "type": "response.create",
+                "response": {
+                    "modalities": ["text", "audio"]
+                }
+            })
             logger.debug("Requested response continuation after function call")
             
         except Exception as e:
