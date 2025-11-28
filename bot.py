@@ -546,8 +546,8 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 **Slash Commands:**
 • `/help` - Show this help message
 • `/avatar` - Transform your avatar with themed templates (Halloween, etc.)
-• `/connect` - Join your voice channel for speech-to-speech AI interaction (can generate images!)
-• `/disconnect` - Disconnect from voice channel
+• `/connect` - Join your voice channel for speech-to-speech AI interaction (elevated users only)
+• `/disconnect` - Disconnect from voice channel (elevated users only)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)
@@ -942,9 +942,9 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
 
 
 
-@bot.tree.command(name='connect', description='Join your voice channel for speech-to-speech AI interaction')
+@bot.tree.command(name='connect', description='Join your voice channel for speech-to-speech AI interaction (elevated users only)')
 async def connect_slash(interaction: discord.Interaction):
-    """Connect to user's voice channel and start voice AI session."""
+    """Connect to user's voice channel and start voice AI session (elevated users only)."""
     try:
         # Check if interaction is from a guild (voice only works in servers)
         if not interaction.guild:
@@ -954,17 +954,13 @@ async def connect_slash(interaction: discord.Interaction):
             )
             return
         
-        # Check if interaction is from a DM channel and user is not elevated
-        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
             await interaction.response.send_message(
-                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                "❌ You don't have permission to use this command. Only elevated users can use voice features.",
                 ephemeral=True
             )
-            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /connect in DM channel")
-            return
-        
-        # Check usage limit
-        if await check_usage_limit_and_respond(interaction):
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /connect")
             return
         
         # Check if OpenAI API key is configured
@@ -1053,9 +1049,9 @@ async def connect_slash(interaction: discord.Interaction):
             pass
 
 
-@bot.tree.command(name='disconnect', description='Disconnect from voice channel')
+@bot.tree.command(name='disconnect', description='Disconnect from voice channel (elevated users only)')
 async def disconnect_slash(interaction: discord.Interaction):
-    """Disconnect from voice channel and end voice AI session."""
+    """Disconnect from voice channel and end voice AI session (elevated users only)."""
     try:
         # Check if interaction is from a guild
         if not interaction.guild:
@@ -1063,6 +1059,15 @@ async def disconnect_slash(interaction: discord.Interaction):
                 "❌ This command can only be used in a server, not in DMs.",
                 ephemeral=True
             )
+            return
+        
+        # Check if the command caller has elevated status
+        if not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command. Only elevated users can use voice features.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /disconnect")
             return
         
         # Check if bot is connected to a voice channel in this guild
