@@ -125,13 +125,14 @@ When you mention the bot in a reply to another message, it will automatically in
 
 ### Voice Bot (Speech-to-Speech)
 
-The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime API:
+The bot supports full-duplex speech interaction using **OpenAI's GPT-4o Realtime API via WebSocket**. This implementation follows the [official OpenAI Realtime WebSocket documentation](https://platform.openai.com/docs/guides/realtime-websocket).
 
 **How to use:**
 1. Join a voice channel in your Discord server
 2. Use `/connect` to have the bot join your voice channel
 3. Speak naturally - the bot will listen and respond in real-time
-4. Use `/disconnect` when you're done
+4. You can ask the bot to generate images by voice - they'll be posted in the text channel
+5. Use `/disconnect` when you're done
 
 **System Requirements:**
 - **FFmpeg**: Required for audio processing
@@ -161,12 +162,26 @@ The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime A
 **Discord Permissions:**
 - Bot needs "Connect" and "Speak" permissions in the voice channel
 
+**Technical Implementation (OpenAI Realtime WebSocket API):**
+- **Connection**: Establishes WebSocket connection to `wss://api.openai.com/v1/realtime`
+- **Audio Format**: PCM16 format for both input and output audio
+- **Session Configuration**: Uses `session.update` event to configure:
+  - Modalities: text and audio
+  - Voice: alloy (customizable)
+  - VAD (Voice Activity Detection): Server-side with configurable threshold
+  - Input transcription: Uses Whisper for speech-to-text
+  - Tools: Function calling for image generation
+- **Audio Streaming**: Real-time bidirectional audio via `input_audio_buffer.append` and `response.audio.delta` events
+- **Response Handling**: Automatic response creation after VAD detects speech end
+
 **Features:**
 - Full-duplex voice interaction (listen and speak simultaneously)
-- Real-time OpenAI Realtime API integration
+- Real-time OpenAI Realtime API integration via WebSocket
 - Audio response playback into voice channel
 - Server-side voice activity detection (VAD) configured
 - Automatic audio format conversion (Discord 48kHz stereo ↔ OpenAI 24kHz mono)
+- Voice-triggered image generation (speak to generate images)
+- Input audio transcription logging
 - Proper session management and cleanup
 
 **Docker Deployment:**

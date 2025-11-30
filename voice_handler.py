@@ -1,10 +1,24 @@
 """
 Voice handler module for speech-to-speech interaction using OpenAI's GPT-4o Realtime API.
+
+This implementation follows the OpenAI Realtime WebSocket documentation:
+https://platform.openai.com/docs/guides/realtime-websocket
+
 This module handles:
 - Voice channel connection management
-- Audio streaming to/from OpenAI Realtime API via WebSocket
+- WebSocket connection to OpenAI Realtime API (wss://api.openai.com/v1/realtime)
+- Audio streaming to/from OpenAI Realtime API
+- Audio format conversion (Discord 48kHz stereo ↔ OpenAI 24kHz mono PCM16)
 - Audio playback using FFmpeg
 - Voice input capture using discord-ext-voice-recv
+- Function calling for image generation
+
+Key API Events Used:
+- session.update: Configure session (modalities, voice, VAD, tools)
+- input_audio_buffer.append: Stream user audio to OpenAI
+- response.create: Request model response after speech
+- response.audio.delta: Receive audio response chunks
+- response.function_call_arguments.done: Handle function calls (image generation)
 
 Debug Logging:
 - Set logging level to DEBUG to see detailed timing information
