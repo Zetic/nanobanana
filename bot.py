@@ -545,7 +545,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
-• `/avatar` - Transform your avatar with themed templates (Halloween, etc.)
+• `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year). Optionally specify a user to transform their avatar instead.
 • `/connect` - Join your voice channel for speech-to-speech AI interaction (elevated users only)
 • `/disconnect` - Disconnect from voice channel (elevated users only)
 • `/usage` - Show token usage statistics (elevated users only)
@@ -828,11 +828,16 @@ async def tier_slash(interaction: discord.Interaction, user: discord.User, tier:
 
 
 @bot.tree.command(name='avatar', description='Transform your avatar with a themed template')
-@app_commands.describe(template='The template theme to apply to your avatar')
+@app_commands.describe(
+    template='The template theme to apply to your avatar',
+    user='Optional: Use another user\'s avatar instead of your own'
+)
 @app_commands.choices(template=[
-    app_commands.Choice(name='Halloween', value='halloween')
+    app_commands.Choice(name='Halloween', value='halloween'),
+    app_commands.Choice(name='Christmas', value='christmas'),
+    app_commands.Choice(name='New Year', value='newyear')
 ])
-async def avatar_slash(interaction: discord.Interaction, template: app_commands.Choice[str]):
+async def avatar_slash(interaction: discord.Interaction, template: app_commands.Choice[str], user: Optional[discord.User] = None):
     """Transform user's avatar with a themed template."""
     try:
         # Check if interaction is from a DM channel and user is not elevated
@@ -851,24 +856,34 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         # Defer the response since this will take some time
         await interaction.response.defer()
         
-        # Get the user's avatar URL
-        user = interaction.user
-        avatar_url = user.display_avatar.url
+        # Use the specified user's avatar, or the caller's avatar if not specified
+        target_user = user if user else interaction.user
+        avatar_url = target_user.display_avatar.url
         
-        logger.info(f"User {user.id} ({user.name}) requesting avatar transformation with template: {template.value}")
+        logger.info(f"User {interaction.user.id} ({interaction.user.name}) requesting avatar transformation with template: {template.value} for user {target_user.id} ({target_user.name})")
         
-        # Download the user's avatar
+        # Download the target user's avatar
         avatar_image = await download_image(avatar_url)
         if not avatar_image:
-            await interaction.followup.send("❌ Failed to download your avatar. Please try again.")
+            await interaction.followup.send("❌ Failed to download the avatar. Please try again.")
             return
         
         # Get the prompt based on the template
         template_prompts = {
-            'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject"
+            'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject",
+            'christmas': "Christmasify this image",
+            'newyear': "Represent this image in a new years party setting for 2026"
+        }
+        
+        # Theme emojis for response messages
+        template_emojis = {
+            'halloween': '🎃',
+            'christmas': '🎄',
+            'newyear': '🎆'
         }
         
         prompt = template_prompts.get(template.value, template_prompts['halloween'])
+        emoji = template_emojis.get(template.value, '🎨')
         
         # Always use the default Gemini model
         generator = get_model_generator("nanobanana")
@@ -878,8 +893,8 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
             prompt, avatar_image
         )
         
-        # Track usage
-        if usage_metadata and not user.bot:
+        # Track usage (use interaction.user for tracking, not target_user)
+        if usage_metadata and not interaction.user.bot:
             try:
                 prompt_tokens = usage_metadata.get("prompt_token_count", 0)
                 output_tokens = usage_metadata.get("candidates_token_count", 0)
@@ -887,8 +902,8 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
                 images_generated = 1 if generated_image else 0
                 
                 usage_tracker.record_usage(
-                    user_id=user.id,
-                    username=user.display_name or user.name,
+                    user_id=interaction.user.id,
+                    username=interaction.user.display_name or interaction.user.name,
                     prompt_tokens=prompt_tokens,
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
@@ -913,7 +928,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
             img_buffer.seek(0)
             
             # Prepare the message
-            content = f"🎃 **{template.name} Avatar Transformation**"
+            content = f"{emoji} **{template.name} Avatar Transformation**"
             if genai_text_response and genai_text_response.strip():
                 content += f"\n\n{genai_text_response}"
             
@@ -921,7 +936,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
                 content=content,
                 file=discord.File(img_buffer, filename=filename)
             )
-            logger.info(f"Successfully generated {template.value} avatar for user {user.id}")
+            logger.info(f"Successfully generated {template.value} avatar for user {target_user.id}")
         else:
             error_msg = "❌ Failed to generate your transformed avatar. Please try again."
             if genai_text_response and genai_text_response.strip():
