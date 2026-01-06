@@ -874,7 +874,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
             'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject",
             'christmas': "Christmasify this image",
             'newyear': "Represent this image in a New Year's party setting for 2026",
-            'mlk': "make this image black and white, provide the subject an Afro and make it into a civil rights activist"
+            'mlk': "Make this image black and white, provide the subject an Afro and make it into a civil rights activist"
         }
         
         # Theme emojis for response messages
