@@ -545,7 +545,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
-• `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year). Optionally specify a user to transform their avatar instead.
+• `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year, MLK). Optionally specify a user to transform their avatar instead.
 • `/connect` - Join your voice channel for speech-to-speech AI interaction (elevated users only)
 • `/disconnect` - Disconnect from voice channel (elevated users only)
 • `/usage` - Show token usage statistics (elevated users only)
@@ -835,7 +835,8 @@ async def tier_slash(interaction: discord.Interaction, user: discord.User, tier:
 @app_commands.choices(template=[
     app_commands.Choice(name='Halloween', value='halloween'),
     app_commands.Choice(name='Christmas', value='christmas'),
-    app_commands.Choice(name='New Year', value='newyear')
+    app_commands.Choice(name='New Year', value='newyear'),
+    app_commands.Choice(name='MLK', value='mlk')
 ])
 async def avatar_slash(interaction: discord.Interaction, template: app_commands.Choice[str], user: Optional[discord.User] = None):
     """Transform user's avatar with a themed template."""
@@ -872,14 +873,16 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         template_prompts = {
             'halloween': "Modify this users avatar so that it is Halloween themed. Attempt to provide the subject of the avatar so that it is wearing a Halloween outfit that best suits the subject",
             'christmas': "Christmasify this image",
-            'newyear': "Represent this image in a New Year's party setting for 2026"
+            'newyear': "Represent this image in a New Year's party setting for 2026",
+            'mlk': "make this image black and white, provide the subject an Afro and make it into a civil rights activist"
         }
         
         # Theme emojis for response messages
         template_emojis = {
             'halloween': '🎃',
             'christmas': '🎄',
-            'newyear': '🎆'
+            'newyear': '🎆',
+            'mlk': '✊'
         }
         
         prompt = template_prompts.get(template.value, template_prompts['halloween'])
