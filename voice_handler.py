@@ -36,7 +36,9 @@ try:
 except ImportError:
     # Create a custom OpusError class if discord.opus is not available
     # This should rarely happen as discord.py includes opus support
-    class OpusError(RuntimeError):
+    # Note: The actual discord.opus.OpusError may have different behavior,
+    # but this fallback allows the code to function without opus installed
+    class OpusError(Exception):
         """Custom OpusError for when discord.opus.OpusError is not available."""
         pass
 
@@ -616,15 +618,16 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                 
                 # Track errors per SSRC to avoid log spam
                 if ssrc is not None:
-                    error_count = self._error_count_per_ssrc.get(ssrc, 0)
-                    self._error_count_per_ssrc[ssrc] = error_count + 1
+                    # Increment error count efficiently
+                    self._error_count_per_ssrc[ssrc] = self._error_count_per_ssrc.get(ssrc, 0) + 1
+                    error_count = self._error_count_per_ssrc[ssrc]
                     
                     # Only log the first few errors per SSRC to avoid spam
-                    if error_count < self.MAX_ERROR_LOGS_PER_SSRC:
+                    if error_count <= self.MAX_ERROR_LOGS_PER_SSRC:
                         logger.warning(
                             f"Opus decode error for SSRC {ssrc} (User: {user}): {type(opus_error).__name__}: {opus_error}"
                         )
-                    elif error_count == self.MAX_ERROR_LOGS_PER_SSRC:
+                    elif error_count == self.MAX_ERROR_LOGS_PER_SSRC + 1:
                         logger.warning(
                             f"Suppressing further Opus errors for SSRC {ssrc} (User: {user})"
                         )
