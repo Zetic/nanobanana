@@ -16,7 +16,7 @@ import io
 import time
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List, Tuple
-from collections import deque
+from collections import deque, defaultdict
 
 import discord
 from discord import VoiceClient
@@ -34,10 +34,11 @@ except ImportError:
 try:
     from discord.opus import OpusError
 except ImportError:
-    # Create a custom OpusError class if discord.opus is not available
-    # This should rarely happen as discord.py includes opus support
+    # Create a custom OpusError class if discord.opus.OpusError is not importable
+    # This can happen if discord.py is installed but opus libraries are missing,
+    # or in testing environments without full discord.py installation
     # Note: The actual discord.opus.OpusError may have different behavior,
-    # but this fallback allows the code to function without opus installed
+    # but this fallback allows the code to function in such environments
     class OpusError(Exception):
         """Custom OpusError for when discord.opus.OpusError is not available."""
         pass
@@ -578,8 +579,8 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         self._buffer_threshold = 3200
         # Track known SSRCs to log warnings for unknown sources
         self._known_ssrcs = set()
-        # Track Opus decode errors per SSRC to avoid log spam
-        self._error_count_per_ssrc = {}
+        # Track Opus decode errors per SSRC to avoid log spam (auto-initialized to 0)
+        self._error_count_per_ssrc = defaultdict(int)
         
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
@@ -608,7 +609,8 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         try:
             # Get the PCM audio data (48kHz, 16-bit, stereo)
             # Note: Accessing data.pcm triggers Opus decoding which may raise OpusError
-            # for corrupted streams or packets from unknown SSRCs
+            # for corrupted streams or packets from unknown SSRCs. OSError can also be
+            # raised when the underlying audio data is invalid.
             try:
                 pcm_data = data.pcm
             except (OpusError, OSError) as opus_error:
@@ -618,8 +620,8 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                 
                 # Track errors per SSRC to avoid log spam
                 if ssrc is not None:
-                    # Increment error count efficiently
-                    self._error_count_per_ssrc[ssrc] = self._error_count_per_ssrc.get(ssrc, 0) + 1
+                    # Increment error count efficiently using defaultdict
+                    self._error_count_per_ssrc[ssrc] += 1
                     error_count = self._error_count_per_ssrc[ssrc]
                     
                     # Only log the first few errors per SSRC to avoid spam
