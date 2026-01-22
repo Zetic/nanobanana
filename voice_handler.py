@@ -561,6 +561,10 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         self._buffer_lock = asyncio.Lock()
         # Buffer threshold: ~100ms of audio at 16kHz mono (1600 samples * 2 bytes)
         self._buffer_threshold = 3200
+        # Track known SSRCs to log warnings for unknown sources
+        self._known_ssrcs = set()
+        # Track Opus decode errors per SSRC to avoid log spam
+        self._error_count_per_ssrc = {}
         
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
@@ -580,9 +584,42 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         if not self._voice_session.xai_session:
             return
         
+        # Track SSRC for monitoring unknown sources
+        ssrc = getattr(data, 'ssrc', None)
+        if ssrc is not None and ssrc not in self._known_ssrcs:
+            self._known_ssrcs.add(ssrc)
+            logger.debug(f"New voice source detected - SSRC: {ssrc}, User: {user}")
+        
         try:
             # Get the PCM audio data (48kHz, 16-bit, stereo)
-            pcm_data = data.pcm
+            # Note: Accessing data.pcm triggers Opus decoding which may raise OpusError
+            # for corrupted streams or packets from unknown SSRCs
+            try:
+                pcm_data = data.pcm
+            except Exception as opus_error:
+                # Handle Opus decoding errors gracefully without crashing
+                # This can happen with corrupted streams or unknown SSRC packets
+                error_type = type(opus_error).__name__
+                
+                # Track errors per SSRC to avoid log spam
+                if ssrc is not None:
+                    error_count = self._error_count_per_ssrc.get(ssrc, 0)
+                    self._error_count_per_ssrc[ssrc] = error_count + 1
+                    
+                    # Only log the first few errors per SSRC to avoid spam
+                    if error_count < 3:
+                        logger.warning(
+                            f"⚠️ Opus decode error for SSRC {ssrc} (User: {user}): {error_type}: {opus_error}"
+                        )
+                    elif error_count == 3:
+                        logger.warning(
+                            f"⚠️ Suppressing further Opus errors for SSRC {ssrc} (User: {user})"
+                        )
+                else:
+                    logger.warning(f"⚠️ Opus decode error (User: {user}): {error_type}: {opus_error}")
+                
+                # Skip this packet and continue - don't crash the entire receive loop
+                return
             
             if pcm_data:
                 # Resample from Discord format (48kHz stereo) to XAI format (16kHz mono)
@@ -604,7 +641,8 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                             self._loop
                         )
         except Exception as e:
-            logger.error(f"Error processing voice data from {user}: {e}")
+            # Catch any other unexpected errors
+            logger.error(f"Unexpected error processing voice data from {user}: {type(e).__name__}: {e}")
     
     def cleanup(self):
         """Clean up the audio sink and flush any remaining audio."""
