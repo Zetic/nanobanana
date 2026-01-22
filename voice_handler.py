@@ -37,10 +37,16 @@ except ImportError:
     # Create a custom OpusError class if discord.opus.OpusError is not importable
     # This can happen if discord.py is installed but opus libraries are missing,
     # or in testing environments without full discord.py installation
-    # Note: The actual discord.opus.OpusError may have different behavior,
-    # but this fallback allows the code to function in such environments
+    # Note: The actual discord.opus.OpusError may have additional attributes/methods.
+    # This fallback provides only basic exception functionality for error handling.
+    # For production use, proper opus libraries should be installed.
     class OpusError(Exception):
-        """Custom OpusError for when discord.opus.OpusError is not available."""
+        """
+        Custom OpusError for when discord.opus.OpusError is not available.
+        
+        This is a minimal fallback that only provides basic Exception functionality.
+        It lacks any opus-specific attributes or methods that the real OpusError might have.
+        """
         pass
 
 import config
@@ -563,6 +569,10 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
     # Maximum number of Opus decode errors to log per SSRC before suppressing
     MAX_ERROR_LOGS_PER_SSRC = 3
     
+    # Maximum number of SSRCs to track for error counting (prevents memory leaks)
+    # In a typical Discord voice channel, there are usually < 100 concurrent speakers
+    MAX_TRACKED_SSRCS = 1000
+    
     def __init__(self, voice_session: 'VoiceSession'):
         """
         Initialize the XAI voice sink.
@@ -620,6 +630,15 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                 
                 # Track errors per SSRC to avoid log spam
                 if ssrc is not None:
+                    # Prevent memory leak: Clear old SSRC tracking if limit exceeded
+                    # This shouldn't happen in practice (typical voice channels have < 100 speakers)
+                    if len(self._error_count_per_ssrc) >= self.MAX_TRACKED_SSRCS:
+                        # Clear the tracking - we've seen too many unique SSRCs
+                        logger.warning(
+                            f"Clearing SSRC error tracking (reached limit of {self.MAX_TRACKED_SSRCS} SSRCs)"
+                        )
+                        self._error_count_per_ssrc.clear()
+                    
                     # Increment error count efficiently using defaultdict
                     self._error_count_per_ssrc[ssrc] += 1
                     error_count = self._error_count_per_ssrc[ssrc]
