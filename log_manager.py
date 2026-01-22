@@ -98,36 +98,6 @@ class LogManager:
             
         except Exception:
             return None
-    
-    def set_debug_logging(self, enabled: bool = True) -> None:
-        """
-        Enable or disable debug logging for voice handler troubleshooting.
-        
-        When enabled, detailed timing information and voice pipeline events
-        will be logged to help diagnose slow response times.
-        
-        Args:
-            enabled: True to enable DEBUG level logging, False to set INFO level
-        """
-        level = logging.DEBUG if enabled else logging.INFO
-        
-        # Set level for voice handler module specifically
-        voice_logger = logging.getLogger('voice_handler')
-        voice_logger.setLevel(level)
-        
-        # Also set the root logger level if enabling debug
-        root_logger = logging.getLogger()
-        if enabled:
-            root_logger.setLevel(logging.DEBUG)
-        else:
-            root_logger.setLevel(logging.INFO)
-        
-        # Set level on the daily handler
-        if self.daily_handler:
-            self.daily_handler.setLevel(level)
-        
-        status = "enabled" if enabled else "disabled"
-        logging.info(f"Debug logging {status}")
 
 # Global instance
 log_manager = LogManager()

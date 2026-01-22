@@ -14,28 +14,19 @@ from image_utils import download_image
 from model_interface import get_model_generator
 from usage_tracker import usage_tracker
 from log_manager import log_manager
-from voice_handler import voice_manager
 
 # Set up logging
-# Use DEBUG level if DEBUG_LOGGING is enabled in config, otherwise INFO
-log_level = logging.DEBUG if config.DEBUG_LOGGING else logging.INFO
 logging.basicConfig(
-    level=log_level,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Enable debug logging in log_manager if configured
-if config.DEBUG_LOGGING:
-    log_manager.set_debug_logging(True)
-    logger.info("Debug logging enabled via DEBUG_LOGGING environment variable")
 
 # All UI classes removed - bot now returns natural API responses directly
 
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
-intents.voice_states = True  # Required for voice channel operations
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
 
 # Bot snitching feature - track messages that mention the bot
@@ -546,19 +537,10 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 **Slash Commands:**
 • `/help` - Show this help message
 • `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year). Optionally specify a user to transform their avatar instead.
-• `/connect` - Join your voice channel for speech-to-speech AI interaction (elevated users only)
-• `/disconnect` - Disconnect from voice channel (elevated users only)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)
-• `/tier` - Assign a tier to a user (elevated users only)
-
-**Voice Features:**
-When connected to a voice channel, you can ask me to generate images by voice! Just say something like:
-• "Create an image of a sunset over mountains"
-• "Draw me a cute cartoon cat"
-• "Generate a futuristic city skyline"
-The generated images will be posted in the text channel where you used `/connect`."""
+• `/tier` - Assign a tier to a user (elevated users only)"""
     
     await interaction.response.send_message(help_text)
 
@@ -953,170 +935,6 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         except:
             # If followup fails, try to send a regular response
             pass
-
-
-
-
-@bot.tree.command(name='connect', description='Join your voice channel for speech-to-speech AI interaction (elevated users only)')
-async def connect_slash(interaction: discord.Interaction):
-    """Connect to user's voice channel and start voice AI session (elevated users only)."""
-    try:
-        # Check if interaction is from a guild (voice only works in servers)
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server, not in DMs.",
-                ephemeral=True
-            )
-            return
-        
-        # Check if the command caller has elevated status
-        if not usage_tracker.is_elevated_user(interaction.user.id):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command. Only elevated users can use voice features.",
-                ephemeral=True
-            )
-            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /connect")
-            return
-        
-        # Check if OpenAI API key is configured
-        if not config.OPENAI_API_KEY:
-            await interaction.response.send_message(
-                "❌ Voice bot feature is not configured. Please contact the administrator.",
-                ephemeral=True
-            )
-            logger.warning("Voice connect attempted but OPENAI_API_KEY not configured")
-            return
-        
-        # Check if user is in a voice channel
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "❌ You need to be in a voice channel to use this command.",
-                ephemeral=True
-            )
-            return
-        
-        voice_channel = interaction.user.voice.channel
-        
-        # Check if bot is already connected to a voice channel in this guild
-        if voice_manager.has_active_session(interaction.guild.id):
-            await interaction.response.send_message(
-                "❌ I'm already connected to a voice channel in this server. Use `/disconnect` first.",
-                ephemeral=True
-            )
-            return
-        
-        # Check if bot has permission to connect and speak
-        permissions = voice_channel.permissions_for(interaction.guild.me)
-        if not permissions.connect:
-            await interaction.response.send_message(
-                "❌ I don't have permission to connect to that voice channel.",
-                ephemeral=True
-            )
-            return
-        if not permissions.speak:
-            await interaction.response.send_message(
-                "❌ I don't have permission to speak in that voice channel.",
-                ephemeral=True
-            )
-            return
-        
-        # Defer the response since connecting may take a moment
-        await interaction.response.defer()
-        
-        # Connect to voice channel and start session
-        # Pass the text channel so images can be posted there
-        session, error_reason = await voice_manager.connect(voice_channel, interaction.channel)
-        
-        if session:
-            await interaction.followup.send(
-                f"🎙️ Connected to **{voice_channel.name}**!\n\n"
-                f"I'm now listening and ready to chat. Speak naturally and I'll respond.\n"
-                f"You can ask me to generate images and I'll post them here.\n"
-                f"Use `/disconnect` when you're done."
-            )
-            logger.info(f"User {interaction.user.id} started voice session in channel {voice_channel.id}")
-        else:
-            # Log detailed error and provide user feedback
-            logger.error(f"Voice connection failed for user {interaction.user.id} in channel {voice_channel.id}: {error_reason}")
-            
-            # Create user-friendly error message with debug info
-            user_message = "❌ Failed to connect to the voice channel."
-            if error_reason:
-                user_message += f"\n\n**Reason:** {error_reason}"
-            user_message += "\n\nPlease try again later or contact an administrator if the issue persists."
-            
-            await interaction.followup.send(user_message, ephemeral=True)
-            
-    except Exception as e:
-        logger.error(f"Error in connect command: {e}")
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(
-                    "An error occurred while connecting to voice channel. Please try again.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "An error occurred while connecting to voice channel. Please try again.",
-                    ephemeral=True
-                )
-        except:
-            pass
-
-
-@bot.tree.command(name='disconnect', description='Disconnect from voice channel (elevated users only)')
-async def disconnect_slash(interaction: discord.Interaction):
-    """Disconnect from voice channel and end voice AI session (elevated users only)."""
-    try:
-        # Check if interaction is from a guild
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server, not in DMs.",
-                ephemeral=True
-            )
-            return
-        
-        # Check if the command caller has elevated status
-        if not usage_tracker.is_elevated_user(interaction.user.id):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command. Only elevated users can use voice features.",
-                ephemeral=True
-            )
-            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /disconnect")
-            return
-        
-        # Check if bot is connected to a voice channel in this guild
-        if not voice_manager.has_active_session(interaction.guild.id):
-            await interaction.response.send_message(
-                "❌ I'm not currently connected to a voice channel in this server.",
-                ephemeral=True
-            )
-            return
-        
-        # Get the current session to get channel info before disconnecting
-        session = voice_manager.get_session(interaction.guild.id)
-        channel_name = session.channel.name if session else "voice channel"
-        
-        # Disconnect
-        success = await voice_manager.disconnect(interaction.guild.id)
-        
-        if success:
-            await interaction.response.send_message(
-                f"👋 Disconnected from **{channel_name}**. Thanks for chatting!"
-            )
-            logger.info(f"User {interaction.user.id} ended voice session in guild {interaction.guild.id}")
-        else:
-            await interaction.response.send_message(
-                "❌ Failed to disconnect. Please try again.",
-                ephemeral=True
-            )
-            
-    except Exception as e:
-        logger.error(f"Error in disconnect command: {e}")
-        await interaction.response.send_message(
-            "An error occurred while disconnecting. Please try again.",
-            ephemeral=True
-        )
 
 
 def main():
