@@ -34,8 +34,11 @@ except ImportError:
 try:
     from discord.opus import OpusError
 except ImportError:
-    # Fallback if OpusError is not available
-    OpusError = Exception
+    # Create a custom OpusError class if discord.opus is not available
+    # This should rarely happen as discord.py includes opus support
+    class OpusError(RuntimeError):
+        """Custom OpusError for when discord.opus.OpusError is not available."""
+        pass
 
 import config
 from model_interface import get_model_generator
@@ -554,6 +557,9 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
     Implements the discord-ext-voice-recv AudioSink interface.
     """
     
+    # Maximum number of Opus decode errors to log per SSRC before suppressing
+    MAX_ERROR_LOGS_PER_SSRC = 3
+    
     def __init__(self, voice_session: 'VoiceSession'):
         """
         Initialize the XAI voice sink.
@@ -614,11 +620,11 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                     self._error_count_per_ssrc[ssrc] = error_count + 1
                     
                     # Only log the first few errors per SSRC to avoid spam
-                    if error_count < 3:
+                    if error_count < self.MAX_ERROR_LOGS_PER_SSRC:
                         logger.warning(
                             f"Opus decode error for SSRC {ssrc} (User: {user}): {type(opus_error).__name__}: {opus_error}"
                         )
-                    elif error_count == 3:
+                    elif error_count == self.MAX_ERROR_LOGS_PER_SSRC:
                         logger.warning(
                             f"Suppressing further Opus errors for SSRC {ssrc} (User: {user})"
                         )
