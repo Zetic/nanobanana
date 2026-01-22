@@ -16,7 +16,7 @@ import io
 import time
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List, Tuple
-from collections import deque
+from collections import deque, defaultdict
 
 import discord
 from discord import VoiceClient
@@ -29,6 +29,25 @@ try:
     VOICE_RECV_AVAILABLE = True
 except ImportError:
     VOICE_RECV_AVAILABLE = False
+
+# Import Opus error for specific error handling
+try:
+    from discord.opus import OpusError
+except ImportError:
+    # Create a custom OpusError class if discord.opus.OpusError is not importable
+    # This can happen if discord.py is installed but opus libraries are missing,
+    # or in testing environments without full discord.py installation
+    # Note: The actual discord.opus.OpusError may have additional attributes/methods.
+    # This fallback provides only basic exception functionality for error handling.
+    # For production use, proper opus libraries should be installed.
+    class OpusError(Exception):
+        """
+        Custom OpusError for when discord.opus.OpusError is not available.
+        
+        This is a minimal fallback that only provides basic Exception functionality.
+        It lacks any opus-specific attributes or methods that the real OpusError might have.
+        """
+        pass
 
 import config
 from model_interface import get_model_generator
@@ -547,6 +566,13 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
     Implements the discord-ext-voice-recv AudioSink interface.
     """
     
+    # Maximum number of Opus decode errors to log per SSRC before suppressing
+    MAX_ERROR_LOGS_PER_SSRC = 3
+    
+    # Maximum number of SSRCs to track for error counting (prevents memory leaks)
+    # In a typical Discord voice channel, there are usually < 100 concurrent speakers
+    MAX_TRACKED_SSRCS = 1000
+    
     def __init__(self, voice_session: 'VoiceSession'):
         """
         Initialize the XAI voice sink.
@@ -561,6 +587,10 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         self._buffer_lock = asyncio.Lock()
         # Buffer threshold: ~100ms of audio at 16kHz mono (1600 samples * 2 bytes)
         self._buffer_threshold = 3200
+        # Track known SSRCs to log warnings for unknown sources
+        self._known_ssrcs = set()
+        # Track Opus decode errors per SSRC to avoid log spam (auto-initialized to 0)
+        self._error_count_per_ssrc = defaultdict(int)
         
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
@@ -580,9 +610,53 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         if not self._voice_session.xai_session:
             return
         
+        # Track SSRC for monitoring unknown sources
+        ssrc = getattr(data, 'ssrc', None)
+        if ssrc is not None and ssrc not in self._known_ssrcs:
+            self._known_ssrcs.add(ssrc)
+            logger.debug(f"New voice source detected - SSRC: {ssrc}, User: {user}")
+        
         try:
             # Get the PCM audio data (48kHz, 16-bit, stereo)
-            pcm_data = data.pcm
+            # Note: Accessing data.pcm triggers Opus decoding which may raise OpusError
+            # for corrupted streams or packets from unknown SSRCs. OSError can also be
+            # raised when the underlying audio data is invalid.
+            try:
+                pcm_data = data.pcm
+            except (OpusError, OSError) as opus_error:
+                # Handle Opus decoding errors gracefully without crashing
+                # OpusError: corrupted stream, decoder errors
+                # OSError: can occur with invalid audio data
+                
+                # Track errors per SSRC to avoid log spam
+                if ssrc is not None:
+                    # Prevent memory leak: Clear old SSRC tracking if limit exceeded
+                    # This shouldn't happen in practice (typical voice channels have < 100 speakers)
+                    if len(self._error_count_per_ssrc) >= self.MAX_TRACKED_SSRCS:
+                        # Clear the tracking - we've seen too many unique SSRCs
+                        logger.warning(
+                            f"Clearing SSRC error tracking (reached limit of {self.MAX_TRACKED_SSRCS} SSRCs)"
+                        )
+                        self._error_count_per_ssrc.clear()
+                    
+                    # Increment error count efficiently using defaultdict
+                    self._error_count_per_ssrc[ssrc] += 1
+                    error_count = self._error_count_per_ssrc[ssrc]
+                    
+                    # Only log the first few errors per SSRC to avoid spam
+                    if error_count <= self.MAX_ERROR_LOGS_PER_SSRC:
+                        logger.warning(
+                            f"Opus decode error for SSRC {ssrc} (User: {user}): {type(opus_error).__name__}: {opus_error}"
+                        )
+                    elif error_count == self.MAX_ERROR_LOGS_PER_SSRC + 1:
+                        logger.warning(
+                            f"Suppressing further Opus errors for SSRC {ssrc} (User: {user})"
+                        )
+                else:
+                    logger.warning(f"Opus decode error (User: {user}): {type(opus_error).__name__}: {opus_error}")
+                
+                # Skip this packet and continue - don't crash the entire receive loop
+                return
             
             if pcm_data:
                 # Resample from Discord format (48kHz stereo) to XAI format (16kHz mono)
@@ -604,7 +678,8 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                             self._loop
                         )
         except Exception as e:
-            logger.error(f"Error processing voice data from {user}: {e}")
+            # Catch any other unexpected errors
+            logger.error(f"Unexpected error processing voice data from {user}: {type(e).__name__}: {e}")
     
     def cleanup(self):
         """Clean up the audio sink and flush any remaining audio."""
