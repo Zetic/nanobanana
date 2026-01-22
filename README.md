@@ -9,7 +9,7 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - **Multi-Image Processing**: Process multiple images simultaneously
 - **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
 - **Meme Generation**: Generate nonsensical memes using OpenAI
-- **Voice Bot**: Full-duplex speech-to-speech interaction using OpenAI's GPT-4o Realtime API
+- **Voice Bot**: Full-duplex speech-to-speech interaction using XAI's Grok Voice API
 - **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply (text from original message is ignored)
 - **Bot Snitching**: Catches users who delete messages that mentioned the bot (within 8 hours) and playfully calls them out
 - **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
@@ -24,7 +24,8 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - Python 3.8+
 - Discord Bot Token
 - Google GenAI API Key
-- OpenAI API Key (for voice bot and meme generation)
+- OpenAI API Key (for meme generation)
+- XAI API Key (for voice bot)
 - FFmpeg (required for voice bot feature)
 
 ### Installation
@@ -46,6 +47,7 @@ cp .env.example .env
 # Edit .env with your tokens:
 # DISCORD_TOKEN=your_discord_bot_token_here
 # GOOGLE_API_KEY=your_google_api_key_here
+# XAI_API_KEY=your_xai_api_key_here
 ```
 
 4. Run the bot:
@@ -125,7 +127,7 @@ When you mention the bot in a reply to another message, it will automatically in
 
 ### Voice Bot (Speech-to-Speech)
 
-The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime API:
+The bot supports full-duplex speech interaction using XAI's Grok Voice API:
 
 **How to use:**
 1. Join a voice channel in your Discord server
@@ -155,7 +157,7 @@ The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime A
   ```
 
 **Python Requirements:**
-- OpenAI API key with access to the GPT-4o Realtime API
+- XAI API key with access to the Grok Voice API
 - `discord-ext-voice-recv` extension (included in requirements.txt) for voice input
 
 **Discord Permissions:**
@@ -163,11 +165,20 @@ The bot supports full-duplex speech interaction using OpenAI's GPT-4o Realtime A
 
 **Features:**
 - Full-duplex voice interaction (listen and speak simultaneously)
-- Real-time OpenAI Realtime API integration
+- Real-time XAI Grok Voice API integration
 - Audio response playback into voice channel
-- Server-side voice activity detection (VAD) configured
-- Automatic audio format conversion (Discord 48kHz stereo ↔ OpenAI 24kHz mono)
+- Server-side voice activity detection (VAD)
+- Automatic audio format conversion (Discord 48kHz stereo ↔ XAI 16kHz mono)
 - Proper session management and cleanup
+
+**Voice Options:**
+You can configure the voice used by the bot in your `.env` file:
+- `ara` (default)
+- `ash`
+- `ballad`
+- `coral`
+- `sage`
+- `verse`
 
 **Docker Deployment:**
 If running in Docker, add these to your Dockerfile:
@@ -256,8 +267,10 @@ All bot activities, errors, and user interactions are logged for monitoring and 
 |----------|-------------|----------|
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
-| `OPENAI_API_KEY` | Your OpenAI API key (for meme generation and voice bot) | Yes |
-| `OPENAI_REALTIME_MODEL` | OpenAI Realtime model for voice bot (default: `gpt-4o-realtime-preview-2024-12-17`) | No |
+| `OPENAI_API_KEY` | Your OpenAI API key (for meme generation) | Yes |
+| `XAI_API_KEY` | Your XAI API key (for voice bot) | Yes |
+| `XAI_VOICE_MODEL` | XAI voice model (default: `grok-2-voice-1212`) | No |
+| `XAI_VOICE` | XAI voice to use: ara, ash, ballad, coral, sage, verse (default: `ara`) | No |
 | `ELEVATED_USERS` | Comma-separated Discord user IDs with elevated permissions | No |
 
 ### Bot Configuration
@@ -277,7 +290,7 @@ nanobanana/
 ├── bot.py              # Main Discord bot implementation
 ├── config.py           # Configuration management
 ├── model_interface.py  # Unified AI model interface (Gemini, GPT, Chat)
-├── voice_handler.py    # Voice bot and OpenAI Realtime API integration
+├── voice_handler.py    # Voice bot and XAI Grok Voice API integration
 ├── image_utils.py      # Image processing utilities
 ├── usage_tracker.py    # User usage tracking system
 ├── log_manager.py      # Logging system management
@@ -295,9 +308,11 @@ The bot uses multiple AI providers:
 - **Text-to-Image**: Creates images from text descriptions
 - **Image-to-Image**: Transforms existing images based on prompts
 
-**OpenAI (meme generation and voice bot):**
+**OpenAI (meme generation):**
 - **Meme Creation**: Generates nonsensical memes using DALL-E 3
-- **Voice Bot**: Full-duplex speech interaction using GPT-4o Realtime API
+
+**XAI (voice bot):**
+- **Voice Bot**: Full-duplex speech interaction using Grok Voice API
 
 ## 📝 Examples
 

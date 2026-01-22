@@ -978,13 +978,13 @@ async def connect_slash(interaction: discord.Interaction):
             logger.info(f"Blocked non-elevated user {interaction.user.id} from using /connect")
             return
         
-        # Check if OpenAI API key is configured
-        if not config.OPENAI_API_KEY:
+        # Check if XAI API key is configured
+        if not config.XAI_API_KEY:
             await interaction.response.send_message(
                 "❌ Voice bot feature is not configured. Please contact the administrator.",
                 ephemeral=True
             )
-            logger.warning("Voice connect attempted but OPENAI_API_KEY not configured")
+            logger.warning("Voice connect attempted but XAI_API_KEY not configured")
             return
         
         # Check if user is in a voice channel

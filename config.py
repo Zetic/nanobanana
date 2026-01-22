@@ -14,6 +14,11 @@ GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_REALTIME_MODEL = os.getenv('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview-2024-12-17')
 
+# XAI configuration
+XAI_API_KEY = os.getenv('XAI_API_KEY')
+XAI_VOICE_MODEL = os.getenv('XAI_VOICE_MODEL', 'grok-2-voice-1212')
+XAI_VOICE = os.getenv('XAI_VOICE', 'ara')
+
 # Bot configuration
 COMMAND_PREFIX = '!'
 MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8MB max per image
