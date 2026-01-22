@@ -742,10 +742,11 @@ class VoiceSession:
                     await asyncio.sleep(0.1)
                 
         except asyncio.CancelledError:
+            logger.debug("Listen loop cancelled")
         except Exception as e:
             logger.error(f"Error in listen loop: {e}")
         finally:
-            logger.debug(f"[DEBUG] Listen loop ended at {datetime.now().isoformat()}")
+            logger.debug("Listen loop ended")
     
     async def stop(self):
         """Stop the voice session and cleanup."""
