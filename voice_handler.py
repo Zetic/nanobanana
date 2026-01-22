@@ -30,6 +30,13 @@ try:
 except ImportError:
     VOICE_RECV_AVAILABLE = False
 
+# Import Opus error for specific error handling
+try:
+    from discord.opus import OpusError
+except ImportError:
+    # Fallback if OpusError is not available
+    OpusError = Exception
+
 import config
 from model_interface import get_model_generator
 
@@ -596,10 +603,10 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
             # for corrupted streams or packets from unknown SSRCs
             try:
                 pcm_data = data.pcm
-            except Exception as opus_error:
+            except (OpusError, OSError) as opus_error:
                 # Handle Opus decoding errors gracefully without crashing
-                # This can happen with corrupted streams or unknown SSRC packets
-                error_type = type(opus_error).__name__
+                # OpusError: corrupted stream, decoder errors
+                # OSError: can occur with invalid audio data
                 
                 # Track errors per SSRC to avoid log spam
                 if ssrc is not None:
@@ -609,14 +616,14 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
                     # Only log the first few errors per SSRC to avoid spam
                     if error_count < 3:
                         logger.warning(
-                            f"⚠️ Opus decode error for SSRC {ssrc} (User: {user}): {error_type}: {opus_error}"
+                            f"Opus decode error for SSRC {ssrc} (User: {user}): {type(opus_error).__name__}: {opus_error}"
                         )
                     elif error_count == 3:
                         logger.warning(
-                            f"⚠️ Suppressing further Opus errors for SSRC {ssrc} (User: {user})"
+                            f"Suppressing further Opus errors for SSRC {ssrc} (User: {user})"
                         )
                 else:
-                    logger.warning(f"⚠️ Opus decode error (User: {user}): {error_type}: {opus_error}")
+                    logger.warning(f"Opus decode error (User: {user}): {type(opus_error).__name__}: {opus_error}")
                 
                 # Skip this packet and continue - don't crash the entire receive loop
                 return
