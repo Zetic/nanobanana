@@ -738,6 +738,11 @@ class VoiceSession:
         # while XAIRealtimeSession uses it to block send_audio() during responses
         self._response_in_progress = False  # Track if a response is being generated
         self._stop_requested = False  # Track if stop has been requested during response
+        # Voice receive error recovery tracking
+        self._listen_restart_count = 0  # Track number of listen restarts
+        self._max_listen_restarts = 5  # Maximum restarts before giving up
+        self._listen_restart_window = 60  # Time window in seconds for restart tracking
+        self._last_listen_restart_time = 0.0  # Timestamp of last restart
         
     @property
     def guild_id(self) -> int:
@@ -776,6 +781,10 @@ class VoiceSession:
             return False, error_reason
         
         logger.info("✅ Successfully connected to XAI Realtime API")
+        
+        # Log diagnostic information about Opus library
+        self._log_opus_diagnostics()
+        
         self._running = True
         
         # Start listening for Discord audio
@@ -831,12 +840,58 @@ class VoiceSession:
             
             task.add_done_callback(handle_stop_error)
     
+    def _log_opus_diagnostics(self):
+        """Log diagnostic information about the Opus library being used."""
+        try:
+            import discord.opus
+            if discord.opus.is_loaded():
+                logger.info(f"🔍 Opus library loaded: {discord.opus._lib}")
+                logger.debug(f"Opus library path: {getattr(discord.opus._lib, '_name', 'unknown')}")
+            else:
+                logger.warning("⚠️ Opus library not loaded")
+        except Exception as e:
+            logger.debug(f"Could not retrieve Opus diagnostics: {e}")
+    
+    def _should_restart_listener(self) -> bool:
+        """
+        Determine if the listener should be restarted based on restart tracking.
+        
+        Returns:
+            True if restart is allowed, False if too many restarts in time window
+        """
+        current_time = time.time()
+        
+        # Reset counter if we're outside the restart window
+        if current_time - self._last_listen_restart_time > self._listen_restart_window:
+            self._listen_restart_count = 0
+        
+        # Check if we've exceeded max restarts
+        if self._listen_restart_count >= self._max_listen_restarts:
+            logger.error(
+                f"❌ Voice receive has crashed {self._listen_restart_count} times "
+                f"in {self._listen_restart_window}s. Not restarting to prevent infinite loop."
+            )
+            return False
+        
+        return True
+    
+    def _record_listener_restart(self):
+        """Record that a listener restart occurred."""
+        self._listen_restart_count += 1
+        self._last_listen_restart_time = time.time()
+        logger.info(
+            f"🔄 Voice receive restart #{self._listen_restart_count} "
+            f"(max {self._max_listen_restarts} in {self._listen_restart_window}s)"
+        )
+    
     async def _listen_loop(self):
         """
         Main loop for receiving audio from Discord voice channel.
         
         Uses discord-ext-voice-recv extension when available to capture voice input
         and stream it to XAI Realtime API.
+        
+        Includes automatic restart on Opus decode failures to maintain resilience.
         """
         try:
             logger.info("🎧 Voice session active - connected to XAI Realtime API")
@@ -845,14 +900,65 @@ class VoiceSession:
             if VOICE_RECV_AVAILABLE and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
                 logger.info("✅ Voice INPUT enabled - bot can listen and respond")
                 
-                # Create and start the audio sink for receiving voice
-                self._audio_sink = XAIVoiceSink(self)
-                self.voice_client.listen(self._audio_sink)
-                logger.info("🎤 Now listening for voice input from users")
-                
-                # Keep the session alive while listening
+                # Auto-restart loop for voice receive resilience
                 while self._running:
-                    await asyncio.sleep(0.1)
+                    try:
+                        # Create and start the audio sink for receiving voice
+                        self._audio_sink = XAIVoiceSink(self)
+                        self.voice_client.listen(self._audio_sink)
+                        logger.info("🎤 Now listening for voice input from users")
+                        
+                        # Keep the session alive while listening
+                        # The voice receive router runs in a background thread managed by discord-ext-voice-recv
+                        while self._running:
+                            await asyncio.sleep(0.1)
+                            
+                    except (OpusError, OSError, Exception) as e:
+                        # Voice receive has crashed - likely due to Opus decode error
+                        # This can happen when:
+                        # - Corrupted RTP packets are received
+                        # - SSRC is unknown/unmapped
+                        # - Packet sequence issues occur
+                        
+                        if not self._running:
+                            # Session is shutting down normally
+                            break
+                        
+                        logger.error(
+                            f"⚠️ Voice receive error: {type(e).__name__}: {e}. "
+                            "This is often caused by corrupted Opus packets."
+                        )
+                        
+                        # Check if we should attempt restart
+                        if not self._should_restart_listener():
+                            logger.error(
+                                "❌ Voice receive has failed too many times. "
+                                "Bot is now DEAF - can play responses but cannot hear users. "
+                                "Disconnect and reconnect to restore voice input."
+                            )
+                            break
+                        
+                        # Record restart and attempt recovery
+                        self._record_listener_restart()
+                        
+                        # Stop the current listener if still active
+                        try:
+                            self.voice_client.stop_listening()
+                        except Exception:
+                            pass
+                        
+                        # Cleanup old sink
+                        if self._audio_sink:
+                            try:
+                                self._audio_sink.cleanup()
+                            except Exception:
+                                pass
+                            self._audio_sink = None
+                        
+                        # Brief delay before restart to avoid tight loop
+                        await asyncio.sleep(1.0)
+                        
+                        logger.info("🔄 Attempting to restart voice receive...")
                     
             else:
                 # Voice receive not available - playback only mode
@@ -871,7 +977,8 @@ class VoiceSession:
         except asyncio.CancelledError:
             logger.debug("Listen loop cancelled")
         except Exception as e:
-            logger.error(f"Error in listen loop: {e}")
+            logger.error(f"Unexpected error in listen loop: {type(e).__name__}: {e}")
+            logger.debug(f"Stack trace: {''.join(traceback.format_exc())}")
         finally:
             logger.debug("Listen loop ended")
     
