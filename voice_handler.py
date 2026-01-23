@@ -374,8 +374,12 @@ class XAIRealtimeSession:
             elif event_type == "input_audio_buffer.speech_stopped":
                 logger.info("🔇 Speech ended")
                 # Commit audio buffer before requesting response
-                await self._send_event({"type": "input_audio_buffer.commit"})
-                logger.debug("Audio buffer committed")
+                try:
+                    await self._send_event({"type": "input_audio_buffer.commit"})
+                    logger.debug("Audio buffer committed")
+                except Exception as e:
+                    logger.error(f"Failed to commit audio buffer: {e}")
+                    # Continue anyway - the API may still process what it has
                 # Request a response
                 await self._send_event({
                     "type": "response.create",
@@ -813,7 +817,16 @@ class VoiceSession:
         # If stop was requested during response, execute it now
         if self._stop_requested:
             logger.info("Executing deferred stop request")
-            asyncio.create_task(self.stop())
+            # Create task and handle errors gracefully
+            task = asyncio.create_task(self.stop())
+            
+            def handle_stop_error(future):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Error in deferred stop: {e}")
+            
+            task.add_done_callback(handle_stop_error)
     
     async def _listen_loop(self):
         """
@@ -861,9 +874,10 @@ class VoiceSession:
     
     async def stop(self):
         """Stop the voice session and cleanup."""
-        # Log stack trace to identify caller
-        stack_trace = ''.join(traceback.format_stack())
-        logger.debug(f"stop() called from:\n{stack_trace}")
+        # Log stack trace to identify caller (only in debug mode)
+        if config.DEBUG_LOGGING:
+            stack_trace = ''.join(traceback.format_stack())
+            logger.debug(f"stop() called from:\n{stack_trace}")
         
         # If a response is in progress, defer the stop
         if self._response_in_progress:
