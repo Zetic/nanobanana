@@ -612,6 +612,9 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         self._known_ssrcs = set()
         # Track Opus decode errors per SSRC to avoid log spam (auto-initialized to 0)
         self._error_count_per_ssrc = defaultdict(int)
+        # Track last packet received time for health monitoring
+        self._last_packet_time = time.time()
+        self._is_healthy = True
         
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
@@ -630,6 +633,9 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         """
         if not self._voice_session.xai_session:
             return
+        
+        # Update heartbeat - we received a packet
+        self._last_packet_time = time.time()
         
         # Track SSRC for monitoring unknown sources
         ssrc = getattr(data, 'ssrc', None)
@@ -701,6 +707,19 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         except Exception as e:
             # Catch any other unexpected errors
             logger.error(f"Unexpected error processing voice data from {user}: {type(e).__name__}: {e}")
+    
+    def is_receiving(self, timeout: float = 30.0) -> bool:
+        """
+        Check if the sink is still receiving packets.
+        
+        Args:
+            timeout: Maximum time in seconds since last packet before considering unhealthy
+            
+        Returns:
+            True if packets were received recently, False otherwise
+        """
+        time_since_last_packet = time.time() - self._last_packet_time
+        return time_since_last_packet < timeout
     
     def cleanup(self):
         """Clean up the audio sink and flush any remaining audio."""
