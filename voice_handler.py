@@ -614,7 +614,6 @@ class XAIVoiceSink(voice_recv.AudioSink if VOICE_RECV_AVAILABLE else object):
         self._error_count_per_ssrc = defaultdict(int)
         # Track last packet received time for health monitoring
         self._last_packet_time = time.time()
-        self._is_healthy = True
         
     def wants_opus(self) -> bool:
         """Return False - we want decoded PCM audio, not Opus."""
@@ -932,7 +931,7 @@ class VoiceSession:
                         while self._running:
                             await asyncio.sleep(0.1)
                             
-                    except (OpusError, OSError, Exception) as e:
+                    except (OpusError, OSError) as e:
                         # Voice receive has crashed - likely due to Opus decode error
                         # This can happen when:
                         # - Corrupted RTP packets are received
@@ -978,6 +977,37 @@ class VoiceSession:
                         await asyncio.sleep(1.0)
                         
                         logger.info("🔄 Attempting to restart voice receive...")
+                    except Exception as e:
+                        # Unexpected error - log with full details and attempt restart
+                        if not self._running:
+                            break
+                            
+                        logger.error(
+                            f"❌ Unexpected voice receive error: {type(e).__name__}: {e}"
+                        )
+                        logger.debug(f"Stack trace: {''.join(traceback.format_exc())}")
+                        
+                        # Still attempt restart for unexpected errors
+                        if not self._should_restart_listener():
+                            logger.error("Too many restarts. Voice receive disabled.")
+                            break
+                        
+                        self._record_listener_restart()
+                        
+                        # Cleanup
+                        try:
+                            self.voice_client.stop_listening()
+                        except Exception:
+                            pass
+                        if self._audio_sink:
+                            try:
+                                self._audio_sink.cleanup()
+                            except Exception:
+                                pass
+                            self._audio_sink = None
+                        
+                        await asyncio.sleep(1.0)
+                        logger.info("🔄 Attempting to restart after unexpected error...")
                     
             else:
                 # Voice receive not available - playback only mode
