@@ -14,6 +14,7 @@ import logging
 import struct
 import io
 import time
+import traceback
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List, Tuple
 from collections import deque, defaultdict
@@ -142,7 +143,7 @@ class AudioResampler:
 class XAIRealtimeSession:
     """Manages a WebSocket connection to XAI's Grok Realtime API."""
     
-    def __init__(self, on_audio_response: Callable[[bytes], None], on_text_response: Optional[Callable[[str], None]] = None, on_image_generated: Optional[Callable[[Any, str], None]] = None):
+    def __init__(self, on_audio_response: Callable[[bytes], None], on_text_response: Optional[Callable[[str], None]] = None, on_image_generated: Optional[Callable[[Any, str], None]] = None, on_response_started: Optional[Callable[[], None]] = None, on_response_done: Optional[Callable[[], None]] = None):
         """
         Initialize the XAI Realtime session.
         
@@ -150,11 +151,15 @@ class XAIRealtimeSession:
             on_audio_response: Callback function to handle audio response data
             on_text_response: Optional callback for text transcription responses
             on_image_generated: Optional callback when an image is generated (image, prompt)
+            on_response_started: Optional callback when response generation starts
+            on_response_done: Optional callback when response generation completes
         """
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.on_audio_response = on_audio_response
         self.on_text_response = on_text_response
         self.on_image_generated = on_image_generated
+        self.on_response_started = on_response_started
+        self.on_response_done = on_response_done
         self._running = False
         self._receive_task: Optional[asyncio.Task] = None
         self._audio_buffer = bytearray()
@@ -256,6 +261,11 @@ class XAIRealtimeSession:
         if not self.websocket or self.websocket.state != WebSocketState.OPEN:
             return
         
+        # Don't send audio while a response is being generated
+        if self._response_in_progress:
+            logger.debug("Skipping audio input - response in progress")
+            return
+        
         # Encode audio to base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         
@@ -316,6 +326,8 @@ class XAIRealtimeSession:
             elif event_type == "response.created":
                 logger.info("🤔 Bot is generating a response...")
                 self._response_in_progress = True
+                if self.on_response_started:
+                    self.on_response_started()
                 
             elif event_type == "response.audio.delta":
                 # Received audio chunk from XAI
@@ -361,6 +373,13 @@ class XAIRealtimeSession:
                 
             elif event_type == "input_audio_buffer.speech_stopped":
                 logger.info("🔇 Speech ended")
+                # Commit audio buffer before requesting response
+                try:
+                    await self._send_event({"type": "input_audio_buffer.commit"})
+                    logger.debug("Audio buffer committed")
+                except Exception as e:
+                    logger.error(f"Failed to commit audio buffer: {e}")
+                    # Continue anyway - the API may still process what it has
                 # Request a response
                 await self._send_event({
                     "type": "response.create",
@@ -372,6 +391,8 @@ class XAIRealtimeSession:
             elif event_type == "response.done":
                 logger.info("✅ Response complete")
                 self._response_in_progress = False
+                if self.on_response_done:
+                    self.on_response_done()
                 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse XAI message: {e}")
@@ -712,6 +733,11 @@ class VoiceSession:
         self._audio_source: Optional[StreamingAudioSource] = None
         self._audio_sink: Optional['XAIVoiceSink'] = None
         self._listen_task: Optional[asyncio.Task] = None
+        # Note: Both VoiceSession and XAIRealtimeSession track _response_in_progress
+        # This is intentional - VoiceSession uses it to defer stop() calls,
+        # while XAIRealtimeSession uses it to block send_audio() during responses
+        self._response_in_progress = False  # Track if a response is being generated
+        self._stop_requested = False  # Track if stop has been requested during response
         
     @property
     def guild_id(self) -> int:
@@ -734,9 +760,11 @@ class VoiceSession:
         # Create audio source for playback
         self._audio_source = StreamingAudioSource()
         
-        # Create XAI session with callback for audio responses
+        # Create XAI session with callbacks for audio responses and response state
         self.xai_session = XAIRealtimeSession(
-            on_audio_response=self._handle_xai_audio
+            on_audio_response=self._handle_xai_audio,
+            on_response_started=self._handle_response_started,
+            on_response_done=self._handle_response_done
         )
         
         # Connect to XAI
@@ -778,6 +806,30 @@ class VoiceSession:
         # Add to playback queue
         if self._audio_source:
             self._audio_source.add_audio(discord_audio)
+    
+    def _handle_response_started(self):
+        """Handle when XAI starts generating a response."""
+        self._response_in_progress = True
+        logger.debug("VoiceSession: Response generation started")
+    
+    def _handle_response_done(self):
+        """Handle when XAI completes generating a response."""
+        self._response_in_progress = False
+        logger.debug("VoiceSession: Response generation completed")
+        
+        # If stop was requested during response, execute it now
+        if self._stop_requested:
+            logger.info("Executing deferred stop request")
+            # Create task and handle errors gracefully
+            task = asyncio.create_task(self.stop())
+            
+            def handle_stop_error(future):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Error in deferred stop: {e}")
+            
+            task.add_done_callback(handle_stop_error)
     
     async def _listen_loop(self):
         """
@@ -825,6 +877,20 @@ class VoiceSession:
     
     async def stop(self):
         """Stop the voice session and cleanup."""
+        # Log stack trace to identify caller (only in debug mode)
+        if config.DEBUG_LOGGING:
+            stack_trace = ''.join(traceback.format_stack())
+            logger.debug(f"stop() called from:\n{stack_trace}")
+        
+        # If a response is in progress, defer the stop
+        if self._response_in_progress:
+            logger.warning(
+                f"⚠️ Stop requested while response in progress in guild {self.guild_id}. "
+                "Deferring until response completes..."
+            )
+            self._stop_requested = True
+            return
+        
         logger.info(f"🔌 Stopping voice session in guild {self.guild_id}...")
         self._running = False
         
