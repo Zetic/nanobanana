@@ -733,6 +733,9 @@ class VoiceSession:
         self._audio_source: Optional[StreamingAudioSource] = None
         self._audio_sink: Optional['XAIVoiceSink'] = None
         self._listen_task: Optional[asyncio.Task] = None
+        # Note: Both VoiceSession and XAIRealtimeSession track _response_in_progress
+        # This is intentional - VoiceSession uses it to defer stop() calls,
+        # while XAIRealtimeSession uses it to block send_audio() during responses
         self._response_in_progress = False  # Track if a response is being generated
         self._stop_requested = False  # Track if stop has been requested during response
         
