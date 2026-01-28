@@ -49,7 +49,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             raise ValueError("GOOGLE_API_KEY not found in environment variables")
         
         self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
-        self.model = "gemini-2.5-flash-image-preview"
+        self.model = "gemini-2.5-flash-image"
         self.text_only_model = "gemini-2.5-flash"
     
     def _extract_image_from_response(self, response) -> Optional[Image.Image]:
