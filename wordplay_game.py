@@ -12,6 +12,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# Session configuration
+SESSION_TIMEOUT_MINUTES = 10  # Sessions expire after this duration
+SESSION_CLEANUP_INTERVAL = 300  # Cleanup runs every 5 minutes (in seconds)
+
 
 class WordplaySession:
     """Represents a single wordplay game session for a user."""
@@ -26,8 +30,8 @@ class WordplaySession:
         self.solved = False
     
     def is_expired(self) -> bool:
-        """Check if the session has expired (10 minutes)."""
-        return datetime.now() - self.created_at > timedelta(minutes=10)
+        """Check if the session has expired."""
+        return datetime.now() - self.created_at > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
     
     def check_answer(self, answer: str) -> bool:
         """Check if the provided answer is correct."""
@@ -84,10 +88,15 @@ class WordplaySessionManager:
             logger.info(f"Removed wordplay session for user {user_id}")
     
     async def cleanup_expired_sessions(self):
-        """Periodically clean up expired sessions."""
+        """
+        Periodically clean up expired sessions.
+        
+        Cleanup runs more frequently than the session timeout to prevent
+        memory buildup from expired sessions.
+        """
         while True:
             try:
-                await asyncio.sleep(300)  # Check every 5 minutes
+                await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
                 expired_users = [
                     user_id for user_id, session in self.sessions.items()
                     if session.is_expired()

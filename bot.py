@@ -15,7 +15,7 @@ from model_interface import get_model_generator
 from usage_tracker import usage_tracker
 from log_manager import log_manager
 from voice_handler import voice_manager
-from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image
+from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image, SESSION_TIMEOUT_MINUTES
 
 # Set up logging
 # Use DEBUG level if DEBUG_LOGGING is enabled in config, otherwise INFO
@@ -1125,7 +1125,7 @@ async def wordplay_slash(interaction: discord.Interaction):
         existing_session = session_manager.get_session(interaction.user.id)
         if existing_session and not existing_session.is_expired():
             # Calculate remaining time, ensuring it's not negative
-            time_remaining = existing_session.created_at + timedelta(minutes=10) - datetime.now()
+            time_remaining = existing_session.created_at + timedelta(minutes=SESSION_TIMEOUT_MINUTES) - datetime.now()
             minutes_remaining = max(0, int(time_remaining.total_seconds() / 60))
             
             await interaction.response.send_message(
@@ -1189,8 +1189,8 @@ async def wordplay_slash(interaction: discord.Interaction):
             # Delete the status message before showing error
             try:
                 await status_msg.delete()
-            except:
-                pass
+            except (discord.NotFound, discord.HTTPException) as e:
+                logger.warning(f"Could not delete status message: {e}")
             
             await interaction.followup.send(
                 "❌ Failed to generate puzzle images. Please try again.",
@@ -1202,8 +1202,8 @@ async def wordplay_slash(interaction: discord.Interaction):
         # Delete the status message before showing the puzzle
         try:
             await status_msg.delete()
-        except:
-            pass
+        except (discord.NotFound, discord.HTTPException) as e:
+            logger.warning(f"Could not delete status message: {e}")
         
         # Create session for this user
         session = session_manager.create_session(
@@ -1214,8 +1214,10 @@ async def wordplay_slash(interaction: discord.Interaction):
         )
         
         # Record usage for rate limiting
-        # Note: Token counting is handled internally by the model generator
-        # For wordplay, we primarily track image generation count for rate limiting
+        # Note: Token counting is handled internally by the model generator.
+        # For wordplay, we primarily track image generation count for rate limiting.
+        # The wordplay command uses the 8-hour cycling rate limit based on images_generated,
+        # not token consumption, so token counts are intentionally set to 0.
         usage_tracker.record_usage(
             user_id=interaction.user.id,
             username=interaction.user.display_name or interaction.user.name,
@@ -1302,8 +1304,8 @@ async def wordplay_slash(interaction: discord.Interaction):
                     "❌ An error occurred while creating the puzzle. Please try again.",
                     ephemeral=True
                 )
-        except:
-            pass
+        except discord.DiscordException as discord_error:
+            logger.error(f"Could not send error message: {discord_error}")
 
 
 @bot.tree.command(name='disconnect', description='Disconnect from voice channel (elevated users only)')
