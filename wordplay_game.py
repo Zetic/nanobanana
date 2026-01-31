@@ -18,10 +18,11 @@ SESSION_CLEANUP_INTERVAL = 300  # Cleanup runs every 5 minutes (in seconds)
 
 
 class WordplaySession:
-    """Represents a single wordplay game session for a user."""
+    """Represents a single wordplay game session for a message."""
     
-    def __init__(self, user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str):
-        self.user_id = user_id
+    def __init__(self, message_id: int, creator_user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str):
+        self.message_id = message_id
+        self.creator_user_id = creator_user_id  # User who created the puzzle
         self.shorter_word = shorter_word.upper()
         self.longer_word = longer_word.upper()
         self.extra_letter = extra_letter.upper()
@@ -29,6 +30,7 @@ class WordplaySession:
         self.created_at = datetime.now()
         self.attempts_remaining = 3
         self.solved = False
+        self.solved_by_user_id = None  # Track who solved it
         self.point_awarded = False  # Track if point has been awarded for this puzzle
     
     def check_answer(self, answer: str) -> bool:
@@ -50,32 +52,32 @@ class WordplaySession:
 
 
 class WordplaySessionManager:
-    """Manages active wordplay sessions for users."""
+    """Manages active wordplay sessions for messages."""
     
     def __init__(self):
-        self.sessions: Dict[int, WordplaySession] = {}
+        self.sessions: Dict[int, WordplaySession] = {}  # message_id -> session
         self._cleanup_task = None
     
-    def create_session(self, user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str) -> WordplaySession:
-        """Create a new session for a user."""
-        # Clean up any existing session for this user
-        if user_id in self.sessions:
-            del self.sessions[user_id]
+    def create_session(self, message_id: int, creator_user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str) -> WordplaySession:
+        """Create a new session for a message."""
+        # Clean up any existing session for this message
+        if message_id in self.sessions:
+            del self.sessions[message_id]
         
-        session = WordplaySession(user_id, shorter_word, longer_word, extra_letter, puzzle_id)
-        self.sessions[user_id] = session
-        logger.info(f"Created wordplay session for user {user_id}: {shorter_word} -> {longer_word} (puzzle_id: {puzzle_id})")
+        session = WordplaySession(message_id, creator_user_id, shorter_word, longer_word, extra_letter, puzzle_id)
+        self.sessions[message_id] = session
+        logger.info(f"Created wordplay session for message {message_id} by user {creator_user_id}: {shorter_word} -> {longer_word} (puzzle_id: {puzzle_id})")
         return session
     
-    def get_session(self, user_id: int) -> Optional[WordplaySession]:
-        """Get the active session for a user."""
-        return self.sessions.get(user_id)
+    def get_session(self, message_id: int) -> Optional[WordplaySession]:
+        """Get the active session for a message."""
+        return self.sessions.get(message_id)
     
-    def remove_session(self, user_id: int):
-        """Remove a session for a user."""
-        if user_id in self.sessions:
-            del self.sessions[user_id]
-            logger.info(f"Removed wordplay session for user {user_id}")
+    def remove_session(self, message_id: int):
+        """Remove a session for a message."""
+        if message_id in self.sessions:
+            del self.sessions[message_id]
+            logger.info(f"Removed wordplay session for message {message_id}")
     
     async def cleanup_expired_sessions(self):
         """
@@ -89,16 +91,16 @@ class WordplaySessionManager:
                 await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
                 
                 # Only clean up sessions that are solved or have no attempts remaining
-                completed_users = [
-                    user_id for user_id, session in self.sessions.items()
+                completed_messages = [
+                    message_id for message_id, session in self.sessions.items()
                     if session.solved or not session.has_attempts_remaining()
                 ]
                 
-                for user_id in completed_users:
-                    del self.sessions[user_id]
+                for message_id in completed_messages:
+                    del self.sessions[message_id]
                 
-                if completed_users:
-                    logger.info(f"Cleaned up {len(completed_users)} completed wordplay sessions")
+                if completed_messages:
+                    logger.info(f"Cleaned up {len(completed_messages)} completed wordplay sessions")
             except Exception as e:
                 logger.error(f"Error cleaning up wordplay sessions: {e}")
 
