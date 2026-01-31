@@ -1157,9 +1157,17 @@ class WordplayAnswerView(discord.ui.View):
     def __init__(self, message_id: int):
         super().__init__(timeout=None)  # No timeout since puzzles don't expire
         self.message_id = message_id
+        # Create button with unique custom_id
+        submit_button = discord.ui.Button(
+            label="Submit Answer",
+            style=discord.ButtonStyle.primary,
+            emoji="✍️",
+            custom_id=f"wordplay_submit_{message_id}"
+        )
+        submit_button.callback = self.submit_answer
+        self.add_item(submit_button)
     
-    @discord.ui.button(label="Submit Answer", style=discord.ButtonStyle.primary, emoji="✍️", custom_id="wordplay_submit")
-    async def submit_answer(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def submit_answer(self, interaction: discord.Interaction):
         """Open the modal for submitting an answer."""
         # Check if there's an active session for this message
         session = session_manager.get_session(self.message_id)
