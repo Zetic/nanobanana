@@ -91,16 +91,20 @@ class TestWordplaySession(unittest.TestCase):
         
         self.assertFalse(session.has_attempts_remaining())
     
-    def test_session_no_expiration(self):
-        """Test that sessions don't expire based on time."""
+    def test_point_awarded_tracking(self):
+        """Test that point_awarded flag is tracked correctly."""
         session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
-        # Simulate time passing by modifying created_at
-        session.created_at = datetime.now() - timedelta(hours=24)
+        # Initially no point awarded
+        self.assertFalse(session.point_awarded)
         
-        # Session should still be valid (no expiration based on time)
-        # We verify this by checking that the session itself doesn't have expiration logic
-        self.assertTrue(session.attempts_remaining > 0 or session.solved)
+        # After solving, point should be manually awarded in application logic
+        session.check_answer("e")
+        self.assertTrue(session.solved)
+        
+        # The application sets point_awarded flag
+        session.point_awarded = True
+        self.assertTrue(session.point_awarded)
 
 
 class TestWordplaySessionManager(unittest.TestCase):

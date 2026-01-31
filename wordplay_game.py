@@ -13,7 +13,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 # Session configuration
-# Note: Sessions no longer expire based on time, they persist until solved or failed
+# Sessions persist until solved or failed (no time-based expiration)
 SESSION_CLEANUP_INTERVAL = 300  # Cleanup runs every 5 minutes (in seconds)
 
 

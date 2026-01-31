@@ -1262,8 +1262,8 @@ async def wordplay_slash(interaction: discord.Interaction):
         except (discord.NotFound, discord.HTTPException) as e:
             logger.warning(f"Could not delete status message: {e}")
         
-        # Generate a unique puzzle ID
-        puzzle_id = f"{interaction.user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Generate a unique puzzle ID with microseconds to ensure uniqueness
+        puzzle_id = f"{interaction.user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         
         # Create session for this user
         session = session_manager.create_session(
