@@ -28,27 +28,36 @@ class WordplaySession:
         self.extra_letter = extra_letter.upper()
         self.puzzle_id = puzzle_id  # Unique identifier for this puzzle
         self.created_at = datetime.now()
-        self.attempts_remaining = 3
-        self.solved = False
-        self.solved_by_user_id = None  # Track who solved it
-        self.point_awarded = False  # Track if point has been awarded for this puzzle
+        self.user_attempts: Dict[int, int] = {}  # user_id -> attempts_remaining
+        self.solved_by_users: set = set()  # Set of user_ids who solved it
+        self.point_awarded_users: set = set()  # Set of user_ids who got points
     
-    def check_answer(self, answer: str) -> bool:
-        """Check if the provided answer is correct."""
+    def check_answer(self, user_id: int, answer: str) -> bool:
+        """Check if the provided answer is correct for a specific user."""
         if not answer or len(answer) != 1 or not answer.isalpha():
             return False
         
+        # Initialize attempts for this user if they haven't tried yet
+        if user_id not in self.user_attempts:
+            self.user_attempts[user_id] = 3
+        
         is_correct = answer.upper() == self.extra_letter
         if is_correct:
-            self.solved = True
+            self.solved_by_users.add(user_id)
         else:
-            self.attempts_remaining -= 1
+            self.user_attempts[user_id] -= 1
         
         return is_correct
     
-    def has_attempts_remaining(self) -> bool:
-        """Check if the user has attempts remaining."""
-        return self.attempts_remaining > 0
+    def has_attempts_remaining(self, user_id: int) -> bool:
+        """Check if a specific user has attempts remaining."""
+        if user_id not in self.user_attempts:
+            return True  # User hasn't tried yet, so they have all attempts
+        return self.user_attempts[user_id] > 0
+    
+    def get_attempts_remaining(self, user_id: int) -> int:
+        """Get the number of attempts remaining for a specific user."""
+        return self.user_attempts.get(user_id, 3)
 
 
 class WordplaySessionManager:
@@ -81,26 +90,26 @@ class WordplaySessionManager:
     
     async def cleanup_expired_sessions(self):
         """
-        Periodically clean up completed sessions.
+        Periodically clean up old sessions.
         
-        This cleanup only removes solved or failed sessions, not active ones.
-        Sessions no longer expire based on time.
+        Since sessions are now multi-user and don't expire based on solve status,
+        this cleanup only removes very old sessions (e.g., over 24 hours old).
         """
         while True:
             try:
                 await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
                 
-                # Only clean up sessions that are solved or have no attempts remaining
-                completed_messages = [
+                # Clean up sessions older than 24 hours
+                old_sessions = [
                     message_id for message_id, session in self.sessions.items()
-                    if session.solved or not session.has_attempts_remaining()
+                    if (datetime.now() - session.created_at).total_seconds() > 86400  # 24 hours
                 ]
                 
-                for message_id in completed_messages:
+                for message_id in old_sessions:
                     del self.sessions[message_id]
                 
-                if completed_messages:
-                    logger.info(f"Cleaned up {len(completed_messages)} completed wordplay sessions")
+                if old_sessions:
+                    logger.info(f"Cleaned up {len(old_sessions)} old wordplay sessions (>24h)")
             except Exception as e:
                 logger.error(f"Error cleaning up wordplay sessions: {e}")
 
