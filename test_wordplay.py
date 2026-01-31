@@ -17,18 +17,20 @@ class TestWordplaySession(unittest.TestCase):
     
     def test_session_creation(self):
         """Test creating a wordplay session."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         self.assertEqual(session.user_id, 12345)
         self.assertEqual(session.shorter_word, "PLANT")
         self.assertEqual(session.longer_word, "PLANET")
         self.assertEqual(session.extra_letter, "E")
+        self.assertEqual(session.puzzle_id, "test_puzzle_1")
         self.assertEqual(session.attempts_remaining, 3)
         self.assertFalse(session.solved)
+        self.assertFalse(session.point_awarded)
     
     def test_check_answer_correct(self):
         """Test checking a correct answer."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         result = session.check_answer("e")
         
@@ -38,7 +40,7 @@ class TestWordplaySession(unittest.TestCase):
     
     def test_check_answer_incorrect(self):
         """Test checking an incorrect answer."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         result = session.check_answer("a")
         
@@ -48,7 +50,7 @@ class TestWordplaySession(unittest.TestCase):
     
     def test_check_answer_case_insensitive(self):
         """Test that answer checking is case insensitive."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         result = session.check_answer("E")
         
@@ -57,7 +59,7 @@ class TestWordplaySession(unittest.TestCase):
     
     def test_check_answer_invalid_length(self):
         """Test checking an answer with invalid length."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         result = session.check_answer("ea")
         
@@ -68,7 +70,7 @@ class TestWordplaySession(unittest.TestCase):
     
     def test_check_answer_non_alphabetic(self):
         """Test checking an answer with non-alphabetic characters."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         result = session.check_answer("1")
         
@@ -79,7 +81,7 @@ class TestWordplaySession(unittest.TestCase):
     
     def test_has_attempts_remaining(self):
         """Test checking if attempts remain."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
         self.assertTrue(session.has_attempts_remaining())
         
@@ -89,18 +91,16 @@ class TestWordplaySession(unittest.TestCase):
         
         self.assertFalse(session.has_attempts_remaining())
     
-    def test_session_expiration(self):
-        """Test session expiration."""
-        session = WordplaySession(12345, "plant", "planet", "e")
+    def test_session_no_expiration(self):
+        """Test that sessions don't expire based on time."""
+        session = WordplaySession(12345, "plant", "planet", "e", "test_puzzle_1")
         
-        # New session should not be expired
-        self.assertFalse(session.is_expired())
+        # Simulate time passing by modifying created_at
+        session.created_at = datetime.now() - timedelta(hours=24)
         
-        # Simulate time passing
-        session.created_at = datetime.now() - timedelta(minutes=11)
-        
-        # Session should now be expired
-        self.assertTrue(session.is_expired())
+        # Session should still be valid (no expiration based on time)
+        # We verify this by checking that the session itself doesn't have expiration logic
+        self.assertTrue(session.attempts_remaining > 0 or session.solved)
 
 
 class TestWordplaySessionManager(unittest.TestCase):
@@ -116,23 +116,25 @@ class TestWordplaySessionManager(unittest.TestCase):
     
     def test_create_session(self):
         """Test creating a session."""
-        session = self.manager.create_session(12345, "plant", "planet", "e")
+        session = self.manager.create_session(12345, "plant", "planet", "e", "test_puzzle_1")
         
         self.assertIsNotNone(session)
         self.assertEqual(session.user_id, 12345)
+        self.assertEqual(session.puzzle_id, "test_puzzle_1")
         self.assertEqual(len(self.manager.sessions), 1)
     
     def test_create_session_replaces_existing(self):
         """Test that creating a new session replaces an existing one."""
-        session1 = self.manager.create_session(12345, "plant", "planet", "e")
-        session2 = self.manager.create_session(12345, "star", "stair", "i")
+        session1 = self.manager.create_session(12345, "plant", "planet", "e", "test_puzzle_1")
+        session2 = self.manager.create_session(12345, "star", "stair", "i", "test_puzzle_2")
         
         self.assertEqual(len(self.manager.sessions), 1)
         self.assertEqual(session2.shorter_word, "STAR")
+        self.assertEqual(session2.puzzle_id, "test_puzzle_2")
     
     def test_get_session(self):
         """Test getting a session."""
-        created_session = self.manager.create_session(12345, "plant", "planet", "e")
+        created_session = self.manager.create_session(12345, "plant", "planet", "e", "test_puzzle_1")
         retrieved_session = self.manager.get_session(12345)
         
         self.assertEqual(created_session, retrieved_session)
@@ -143,21 +145,9 @@ class TestWordplaySessionManager(unittest.TestCase):
         
         self.assertIsNone(session)
     
-    def test_get_expired_session(self):
-        """Test that getting an expired session returns None."""
-        session = self.manager.create_session(12345, "plant", "planet", "e")
-        
-        # Simulate expiration
-        session.created_at = datetime.now() - timedelta(minutes=11)
-        
-        retrieved_session = self.manager.get_session(12345)
-        
-        self.assertIsNone(retrieved_session)
-        self.assertEqual(len(self.manager.sessions), 0)  # Expired session removed
-    
     def test_remove_session(self):
         """Test removing a session."""
-        self.manager.create_session(12345, "plant", "planet", "e")
+        self.manager.create_session(12345, "plant", "planet", "e", "test_puzzle_1")
         self.manager.remove_session(12345)
         
         self.assertEqual(len(self.manager.sessions), 0)

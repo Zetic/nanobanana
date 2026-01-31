@@ -13,25 +13,23 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 # Session configuration
-SESSION_TIMEOUT_MINUTES = 10  # Sessions expire after this duration
+# Note: Sessions no longer expire based on time, they persist until solved or failed
 SESSION_CLEANUP_INTERVAL = 300  # Cleanup runs every 5 minutes (in seconds)
 
 
 class WordplaySession:
     """Represents a single wordplay game session for a user."""
     
-    def __init__(self, user_id: int, shorter_word: str, longer_word: str, extra_letter: str):
+    def __init__(self, user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str):
         self.user_id = user_id
         self.shorter_word = shorter_word.upper()
         self.longer_word = longer_word.upper()
         self.extra_letter = extra_letter.upper()
+        self.puzzle_id = puzzle_id  # Unique identifier for this puzzle
         self.created_at = datetime.now()
         self.attempts_remaining = 3
         self.solved = False
-    
-    def is_expired(self) -> bool:
-        """Check if the session has expired."""
-        return datetime.now() - self.created_at > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+        self.point_awarded = False  # Track if point has been awarded for this puzzle
     
     def check_answer(self, answer: str) -> bool:
         """Check if the provided answer is correct."""
@@ -58,28 +56,20 @@ class WordplaySessionManager:
         self.sessions: Dict[int, WordplaySession] = {}
         self._cleanup_task = None
     
-    def create_session(self, user_id: int, shorter_word: str, longer_word: str, extra_letter: str) -> WordplaySession:
+    def create_session(self, user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str) -> WordplaySession:
         """Create a new session for a user."""
         # Clean up any existing session for this user
         if user_id in self.sessions:
             del self.sessions[user_id]
         
-        session = WordplaySession(user_id, shorter_word, longer_word, extra_letter)
+        session = WordplaySession(user_id, shorter_word, longer_word, extra_letter, puzzle_id)
         self.sessions[user_id] = session
-        logger.info(f"Created wordplay session for user {user_id}: {shorter_word} -> {longer_word}")
+        logger.info(f"Created wordplay session for user {user_id}: {shorter_word} -> {longer_word} (puzzle_id: {puzzle_id})")
         return session
     
     def get_session(self, user_id: int) -> Optional[WordplaySession]:
         """Get the active session for a user."""
-        session = self.sessions.get(user_id)
-        
-        # Clean up expired sessions
-        if session and session.is_expired():
-            logger.info(f"Session for user {user_id} has expired")
-            del self.sessions[user_id]
-            return None
-        
-        return session
+        return self.sessions.get(user_id)
     
     def remove_session(self, user_id: int):
         """Remove a session for a user."""
@@ -89,24 +79,26 @@ class WordplaySessionManager:
     
     async def cleanup_expired_sessions(self):
         """
-        Periodically clean up expired sessions.
+        Periodically clean up completed sessions.
         
-        Cleanup runs more frequently than the session timeout to prevent
-        memory buildup from expired sessions.
+        This cleanup only removes solved or failed sessions, not active ones.
+        Sessions no longer expire based on time.
         """
         while True:
             try:
                 await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
-                expired_users = [
+                
+                # Only clean up sessions that are solved or have no attempts remaining
+                completed_users = [
                     user_id for user_id, session in self.sessions.items()
-                    if session.is_expired()
+                    if session.solved or not session.has_attempts_remaining()
                 ]
                 
-                for user_id in expired_users:
+                for user_id in completed_users:
                     del self.sessions[user_id]
                 
-                if expired_users:
-                    logger.info(f"Cleaned up {len(expired_users)} expired wordplay sessions")
+                if completed_users:
+                    logger.info(f"Cleaned up {len(completed_users)} completed wordplay sessions")
             except Exception as e:
                 logger.error(f"Error cleaning up wordplay sessions: {e}")
 
