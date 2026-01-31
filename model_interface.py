@@ -122,21 +122,9 @@ class GeminiModelGenerator(BaseModelGenerator):
     async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
         try:
-            # Build config for generate_content
-            config_params = {
-                "response_modalities": ["IMAGE"]
-            }
-            
-            # Add aspect ratio to image config if specified
-            if aspect_ratio:
-                config_params["image_config"] = types.ImageConfig(
-                    aspect_ratio=aspect_ratio
-                )
-            
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
-                config=types.GenerateContentConfig(**config_params)
             )
             
             image = self._extract_image_from_response(response)
@@ -179,21 +167,9 @@ class GeminiModelGenerator(BaseModelGenerator):
                     )
                     contents.append(add_image_part)
             
-            # Build config for generate_content
-            config_params = {
-                "response_modalities": ["IMAGE"]
-            }
-            
-            # Add aspect ratio to image config if specified
-            if aspect_ratio:
-                config_params["image_config"] = types.ImageConfig(
-                    aspect_ratio=aspect_ratio
-                )
-            
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
-                config=types.GenerateContentConfig(**config_params)
             )
             
             image = self._extract_image_from_response(response)
