@@ -1079,15 +1079,19 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
         style=discord.TextStyle.short
     )
     
+    def __init__(self, message_id: int):
+        super().__init__()
+        self.message_id = message_id
+    
     async def on_submit(self, interaction: discord.Interaction):
         """Handle the modal submission."""
         try:
-            # Get the user's session
-            session = session_manager.get_session(interaction.user.id)
+            # Get the session for this message
+            session = session_manager.get_session(self.message_id)
             
             if not session:
                 await interaction.response.send_message(
-                    "❌ You don't have an active wordplay puzzle. Use `/wordplay` to start a new puzzle.",
+                    "❌ This puzzle is no longer active. Use `/wordplay` to start a new puzzle.",
                     ephemeral=True
                 )
                 return
@@ -1100,6 +1104,7 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                 # Correct answer! Award point if not already awarded
                 if not session.point_awarded:
                     session.point_awarded = True
+                    session.solved_by_user_id = interaction.user.id
                     new_score = usage_tracker.increment_wordplay_score(
                         interaction.user.id,
                         interaction.user.display_name or interaction.user.name
@@ -1114,8 +1119,8 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                     f"Great job solving the puzzle! 🎊{score_text}",
                     ephemeral=True
                 )
-                session_manager.remove_session(interaction.user.id)
-                logger.info(f"User {interaction.user.id} solved wordplay puzzle correctly")
+                session_manager.remove_session(self.message_id)
+                logger.info(f"User {interaction.user.id} solved wordplay puzzle correctly (message {self.message_id})")
             else:
                 # Incorrect answer
                 if session.has_attempts_remaining():
@@ -1124,7 +1129,7 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                         f"Click the button again to try once more!",
                         ephemeral=True
                     )
-                    logger.info(f"User {interaction.user.id} incorrect wordplay answer, {session.attempts_remaining} attempts left")
+                    logger.info(f"User {interaction.user.id} incorrect wordplay answer, {session.attempts_remaining} attempts left (message {self.message_id})")
                 else:
                     # No more attempts
                     await interaction.response.send_message(
@@ -1134,8 +1139,8 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                         f"Better luck next time! Use `/wordplay` to try another puzzle.",
                         ephemeral=True
                     )
-                    session_manager.remove_session(interaction.user.id)
-                    logger.info(f"User {interaction.user.id} failed wordplay puzzle - no attempts remaining")
+                    session_manager.remove_session(self.message_id)
+                    logger.info(f"User {interaction.user.id} failed wordplay puzzle - no attempts remaining (message {self.message_id})")
         
         except Exception as e:
             logger.error(f"Error in wordplay answer modal: {e}", exc_info=True)
@@ -1149,24 +1154,34 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
 class WordplayAnswerView(discord.ui.View):
     """View with a button to submit an answer to the wordplay puzzle."""
     
-    def __init__(self):
+    def __init__(self, message_id: int):
         super().__init__(timeout=None)  # No timeout since puzzles don't expire
+        self.message_id = message_id
+        # Create button with unique custom_id
+        submit_button = discord.ui.Button(
+            label="Submit Answer",
+            style=discord.ButtonStyle.primary,
+            emoji="✍️",
+            custom_id=f"wordplay_submit_{message_id}"
+        )
+        submit_button.callback = self.submit_answer
+        self.add_item(submit_button)
     
-    @discord.ui.button(label="Submit Answer", style=discord.ButtonStyle.primary, emoji="✍️")
-    async def submit_answer(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def submit_answer(self, interaction: discord.Interaction):
         """Open the modal for submitting an answer."""
-        # Check if the user has an active session
-        session = session_manager.get_session(interaction.user.id)
+        # Check if there's an active session for this message
+        session = session_manager.get_session(self.message_id)
         
         if not session:
             await interaction.response.send_message(
-                "❌ You don't have an active wordplay puzzle. Use `/wordplay` to start a new puzzle.",
+                "❌ This puzzle is no longer active. Use `/wordplay` to start a new puzzle.",
                 ephemeral=True
             )
             return
         
-        # Open the modal
-        await interaction.response.send_modal(WordplayAnswerModal())
+        # Open the modal with the message_id
+        modal = WordplayAnswerModal(self.message_id)
+        await interaction.response.send_modal(modal)
 
 
 @bot.tree.command(name='wordplay', description='Play a wordplay puzzle - guess the extra letter!')
@@ -1180,16 +1195,6 @@ async def wordplay_slash(interaction: discord.Interaction):
                 ephemeral=True
             )
             logger.info(f"Blocked non-elevated user {interaction.user.id} from using /wordplay in DM channel")
-            return
-        
-        # Check if user already has an active session
-        existing_session = session_manager.get_session(interaction.user.id)
-        if existing_session:
-            await interaction.response.send_message(
-                f"❌ You already have an active wordplay puzzle! You have {existing_session.attempts_remaining} attempts remaining.\n"
-                f"Complete your current puzzle before starting a new one.",
-                ephemeral=True
-            )
             return
         
         # Check usage limit (8-hour cooldown)
@@ -1265,15 +1270,6 @@ async def wordplay_slash(interaction: discord.Interaction):
         # Generate a unique puzzle ID with microseconds to ensure uniqueness
         puzzle_id = f"{interaction.user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         
-        # Create session for this user
-        session = session_manager.create_session(
-            interaction.user.id,
-            shorter_word,
-            longer_word,
-            extra_letter,
-            puzzle_id
-        )
-        
         # Record usage for rate limiting
         # Note: Token counting is handled internally by the model generator.
         # For wordplay, we primarily track image generation count for rate limiting.
@@ -1310,7 +1306,7 @@ async def wordplay_slash(interaction: discord.Interaction):
         file1 = discord.File(img1_buffer, filename=filename1)
         file2 = discord.File(img2_buffer, filename=filename2)
         
-        # Create embed with puzzle
+        # Create embed with puzzle (we'll update attempts count after creating session)
         embed = discord.Embed(
             title="🎯 Wordplay Puzzle",
             description=(
@@ -1319,7 +1315,7 @@ async def wordplay_slash(interaction: discord.Interaction):
                 "One word is identical to the other except for **one additional letter**.\n\n"
                 "**Your task:** Find the extra letter that turns the shorter word into the longer word.\n\n"
                 f"💡 **Hint:** The words differ by exactly one letter, and letter order stays the same.\n"
-                f"🎲 **Attempts:** {session.attempts_remaining} remaining\n"
+                f"🎲 **Attempts:** 3 remaining\n"
                 f"🏆 **Reward:** 1 point for solving correctly!"
             ),
             color=discord.Color.blue()
@@ -1344,15 +1340,28 @@ async def wordplay_slash(interaction: discord.Interaction):
         
         embed.set_footer(text="Good luck! 🍀")
         
-        # Create view with answer button
-        view = WordplayAnswerView()
-        
-        # Send the puzzle
-        await interaction.followup.send(
+        # Send the puzzle first to get the message ID
+        puzzle_message = await interaction.followup.send(
             embed=embed,
             files=[file1, file2],
-            view=view
+            wait=True
         )
+        
+        # Now create session with the message ID
+        session = session_manager.create_session(
+            puzzle_message.id,
+            interaction.user.id,
+            shorter_word,
+            longer_word,
+            extra_letter,
+            puzzle_id
+        )
+        
+        # Create view with answer button that has the message_id
+        view = WordplayAnswerView(puzzle_message.id)
+        
+        # Edit the message to add the view
+        await puzzle_message.edit(view=view)
         
         logger.info(f"Wordplay puzzle sent to user {interaction.user.id}")
         
