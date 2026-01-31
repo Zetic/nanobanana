@@ -15,6 +15,7 @@ from model_interface import get_model_generator
 from usage_tracker import usage_tracker
 from log_manager import log_manager
 from voice_handler import voice_manager
+from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image, SESSION_TIMEOUT_MINUTES
 
 # Set up logging
 # Use DEBUG level if DEBUG_LOGGING is enabled in config, otherwise INFO
@@ -77,6 +78,48 @@ async def on_message(message):
     # Ignore bot messages
     if message.author.bot:
         return
+    
+    # Check for wordplay puzzle answers
+    session = session_manager.get_session(message.author.id)
+    if session and not session.is_expired():
+        # Check if the message is a single letter (potential answer)
+        content = message.content.strip()
+        if len(content) == 1 and content.isalpha():
+            # This looks like an answer attempt
+            is_correct = session.check_answer(content)
+            
+            if is_correct:
+                # Correct answer!
+                await message.add_reaction("✅")
+                await message.reply(
+                    f"🎉 **Correct!** The extra letter is **{session.extra_letter}**!\n\n"
+                    f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
+                    f"Great job solving the puzzle! 🎊"
+                )
+                session_manager.remove_session(message.author.id)
+                logger.info(f"User {message.author.id} solved wordplay puzzle correctly")
+                return
+            else:
+                # Incorrect answer
+                await message.add_reaction("❌")
+                
+                if session.has_attempts_remaining():
+                    await message.reply(
+                        f"❌ Sorry, that's not correct. You have **{session.attempts_remaining}** attempts remaining.\n"
+                        f"Try again!"
+                    )
+                    logger.info(f"User {message.author.id} incorrect wordplay answer, {session.attempts_remaining} attempts left")
+                else:
+                    # No more attempts
+                    await message.reply(
+                        f"❌ Sorry, no more attempts remaining!\n\n"
+                        f"The correct answer was **{session.extra_letter}**.\n"
+                        f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
+                        f"Better luck next time! Use `/wordplay` to try another puzzle."
+                    )
+                    session_manager.remove_session(message.author.id)
+                    logger.info(f"User {message.author.id} failed wordplay puzzle - no attempts remaining")
+                return
     
     # Check if message is from a DM channel and user is not elevated
     if is_dm_channel(message.channel) and not usage_tracker.is_elevated_user(message.author.id):
@@ -545,6 +588,7 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
+• `/wordplay` - Play a word puzzle game! Guess the extra letter between two words (1 puzzle every 8 hours)
 • `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year). Optionally specify a user to transform their avatar instead.
 • `/connect` - Join your voice channel for speech-to-speech AI interaction (elevated users only)
 • `/disconnect` - Disconnect from voice channel (elevated users only)
@@ -1062,6 +1106,206 @@ async def connect_slash(interaction: discord.Interaction):
                 )
         except:
             pass
+
+
+@bot.tree.command(name='wordplay', description='Play a wordplay puzzle - guess the extra letter!')
+async def wordplay_slash(interaction: discord.Interaction):
+    """Start a wordplay puzzle where users guess the extra letter between two words."""
+    try:
+        # Check if interaction is from a DM channel and user is not elevated
+        if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+                ephemeral=True
+            )
+            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /wordplay in DM channel")
+            return
+        
+        # Check if user already has an active session
+        existing_session = session_manager.get_session(interaction.user.id)
+        if existing_session and not existing_session.is_expired():
+            # Calculate remaining time, ensuring it's not negative
+            time_remaining = existing_session.created_at + timedelta(minutes=SESSION_TIMEOUT_MINUTES) - datetime.now()
+            minutes_remaining = max(0, int(time_remaining.total_seconds() / 60))
+            
+            await interaction.response.send_message(
+                f"❌ You already have an active wordplay puzzle! You have {existing_session.attempts_remaining} attempts remaining.\n"
+                f"The puzzle will expire in {minutes_remaining} minutes.",
+                ephemeral=True
+            )
+            return
+        
+        # Check usage limit (8-hour cooldown)
+        has_reached_limit, next_available_time = usage_tracker.has_reached_usage_limit(interaction.user.id)
+        
+        # Skip limit check for elevated users
+        if has_reached_limit and not usage_tracker.is_elevated_user(interaction.user.id):
+            if next_available_time:
+                # Calculate time until next available use
+                time_until_available = next_available_time - datetime.now()
+                hours = int(time_until_available.total_seconds() // 3600)
+                minutes = int((time_until_available.total_seconds() % 3600) // 60)
+                
+                await interaction.response.send_message(
+                    f"⏰ You've reached your usage limit. Please try again in {hours}h {minutes}m.\n"
+                    f"(Usage limit: 1 puzzle every 8 hours)",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "⏰ You've reached your usage limit. Please try again later.",
+                    ephemeral=True
+                )
+            return
+        
+        # Defer response since this will take time
+        await interaction.response.defer()
+        
+        # Get the Gemini model generator (nanobanana uses gemini-2.5-flash-image by default)
+        generator = get_model_generator("nanobanana")
+        
+        # Generate word pair
+        word_pair = await generate_word_pair_with_gemini(generator)
+        
+        if not word_pair:
+            await interaction.followup.send(
+                "❌ Failed to generate a word puzzle. Please try again.",
+                ephemeral=True
+            )
+            logger.error(f"Failed to generate word pair for user {interaction.user.id}")
+            return
+        
+        shorter_word, longer_word, extra_letter = word_pair
+        logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letter})")
+        
+        # Generate images for both words
+        status_msg = await interaction.followup.send("🎨 Generating puzzle images...", wait=True)
+        
+        image1 = await generate_word_image(generator, shorter_word)
+        image2 = await generate_word_image(generator, longer_word)
+        
+        # Check if both images were generated successfully
+        if not image1 or not image2:
+            # Delete the status message before showing error
+            try:
+                await status_msg.delete()
+            except (discord.NotFound, discord.HTTPException) as e:
+                logger.warning(f"Could not delete status message: {e}")
+            
+            await interaction.followup.send(
+                "❌ Failed to generate puzzle images. Please try again.",
+                ephemeral=True
+            )
+            logger.error(f"Failed to generate images for word pair: {shorter_word}, {longer_word}")
+            return
+        
+        # Delete the status message before showing the puzzle
+        try:
+            await status_msg.delete()
+        except (discord.NotFound, discord.HTTPException) as e:
+            logger.warning(f"Could not delete status message: {e}")
+        
+        # Create session for this user
+        session = session_manager.create_session(
+            interaction.user.id,
+            shorter_word,
+            longer_word,
+            extra_letter
+        )
+        
+        # Record usage for rate limiting
+        # Note: Token counting is handled internally by the model generator.
+        # For wordplay, we primarily track image generation count for rate limiting.
+        # The wordplay command uses the 8-hour cycling rate limit based on images_generated,
+        # not token consumption, so token counts are intentionally set to 0.
+        usage_tracker.record_usage(
+            user_id=interaction.user.id,
+            username=interaction.user.display_name or interaction.user.name,
+            prompt_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            images_generated=2  # Two images generated per puzzle
+        )
+        
+        # Save images to buffers for Discord
+        img1_buffer = io.BytesIO()
+        img2_buffer = io.BytesIO()
+        image1.save(img1_buffer, format='PNG')
+        image2.save(img2_buffer, format='PNG')
+        img1_buffer.seek(0)
+        img2_buffer.seek(0)
+        
+        # Save images to disk
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename1 = f"wordplay_{shorter_word}_{timestamp}_1.png"
+        filename2 = f"wordplay_{longer_word}_{timestamp}_2.png"
+        
+        filepath1 = os.path.join(config.GENERATED_IMAGES_DIR, filename1)
+        filepath2 = os.path.join(config.GENERATED_IMAGES_DIR, filename2)
+        image1.save(filepath1)
+        image2.save(filepath2)
+        
+        # Create Discord files
+        file1 = discord.File(img1_buffer, filename=filename1)
+        file2 = discord.File(img2_buffer, filename=filename2)
+        
+        # Create embed with puzzle
+        embed = discord.Embed(
+            title="🎯 Wordplay Puzzle",
+            description=(
+                "**Two images, two words, one extra letter!**\n\n"
+                "Look at the images below. Each represents a different word.\n"
+                "One word is identical to the other except for **one additional letter**.\n\n"
+                "**Your task:** Find the extra letter that turns the shorter word into the longer word.\n\n"
+                f"💡 **Hint:** The words differ by exactly one letter, and letter order stays the same.\n"
+                f"⏱️ **Time limit:** 10 minutes\n"
+                f"🎲 **Attempts:** {session.attempts_remaining} remaining"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(
+            name="📸 Image 1",
+            value="Represents one word",
+            inline=True
+        )
+        embed.add_field(
+            name="📸 Image 2",
+            value="Represents another word",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="How to answer:",
+            value="Reply to this message with a single letter (A-Z)",
+            inline=False
+        )
+        
+        embed.set_footer(text="Good luck! 🍀")
+        
+        # Send the puzzle
+        await interaction.followup.send(
+            embed=embed,
+            files=[file1, file2]
+        )
+        
+        logger.info(f"Wordplay puzzle sent to user {interaction.user.id}")
+        
+    except Exception as e:
+        logger.error(f"Error in wordplay command: {e}", exc_info=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "❌ An error occurred while creating the puzzle. Please try again.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ An error occurred while creating the puzzle. Please try again.",
+                    ephemeral=True
+                )
+        except discord.DiscordException as discord_error:
+            logger.error(f"Could not send error message: {discord_error}")
 
 
 @bot.tree.command(name='disconnect', description='Disconnect from voice channel (elevated users only)')
