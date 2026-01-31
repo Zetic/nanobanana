@@ -15,7 +15,7 @@ from model_interface import get_model_generator
 from usage_tracker import usage_tracker
 from log_manager import log_manager
 from voice_handler import voice_manager
-from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image, SESSION_TIMEOUT_MINUTES
+from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image
 
 # Set up logging
 # Use DEBUG level if DEBUG_LOGGING is enabled in config, otherwise INFO
@@ -78,48 +78,6 @@ async def on_message(message):
     # Ignore bot messages
     if message.author.bot:
         return
-    
-    # Check for wordplay puzzle answers
-    session = session_manager.get_session(message.author.id)
-    if session and not session.is_expired():
-        # Check if the message is a single letter (potential answer)
-        content = message.content.strip()
-        if len(content) == 1 and content.isalpha():
-            # This looks like an answer attempt
-            is_correct = session.check_answer(content)
-            
-            if is_correct:
-                # Correct answer!
-                await message.add_reaction("✅")
-                await message.reply(
-                    f"🎉 **Correct!** The extra letter is **{session.extra_letter}**!\n\n"
-                    f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
-                    f"Great job solving the puzzle! 🎊"
-                )
-                session_manager.remove_session(message.author.id)
-                logger.info(f"User {message.author.id} solved wordplay puzzle correctly")
-                return
-            else:
-                # Incorrect answer
-                await message.add_reaction("❌")
-                
-                if session.has_attempts_remaining():
-                    await message.reply(
-                        f"❌ Sorry, that's not correct. You have **{session.attempts_remaining}** attempts remaining.\n"
-                        f"Try again!"
-                    )
-                    logger.info(f"User {message.author.id} incorrect wordplay answer, {session.attempts_remaining} attempts left")
-                else:
-                    # No more attempts
-                    await message.reply(
-                        f"❌ Sorry, no more attempts remaining!\n\n"
-                        f"The correct answer was **{session.extra_letter}**.\n"
-                        f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
-                        f"Better luck next time! Use `/wordplay` to try another puzzle."
-                    )
-                    session_manager.remove_session(message.author.id)
-                    logger.info(f"User {message.author.id} failed wordplay puzzle - no attempts remaining")
-                return
     
     # Check if message is from a DM channel and user is not elevated
     if is_dm_channel(message.channel) and not usage_tracker.is_elevated_user(message.author.id):
@@ -1108,6 +1066,109 @@ async def connect_slash(interaction: discord.Interaction):
             pass
 
 
+# Modal for wordplay answer submission
+class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
+    """Modal for submitting a wordplay puzzle answer."""
+    
+    answer = discord.ui.TextInput(
+        label="Enter the extra letter",
+        placeholder="Type a single letter (A-Z)",
+        min_length=1,
+        max_length=1,
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle the modal submission."""
+        try:
+            # Get the user's session
+            session = session_manager.get_session(interaction.user.id)
+            
+            if not session:
+                await interaction.response.send_message(
+                    "❌ You don't have an active wordplay puzzle. Use `/wordplay` to start a new puzzle.",
+                    ephemeral=True
+                )
+                return
+            
+            # Check the answer
+            user_answer = self.answer.value.strip()
+            is_correct = session.check_answer(user_answer)
+            
+            if is_correct:
+                # Correct answer! Award point if not already awarded
+                if not session.point_awarded:
+                    session.point_awarded = True
+                    new_score = usage_tracker.increment_wordplay_score(
+                        interaction.user.id,
+                        interaction.user.display_name or interaction.user.name
+                    )
+                    score_text = f"\n🏆 **Your total wordplay score: {new_score}**"
+                else:
+                    score_text = ""
+                
+                await interaction.response.send_message(
+                    f"🎉 **Correct!** The extra letter is **{session.extra_letter}**!\n\n"
+                    f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n"
+                    f"Great job solving the puzzle! 🎊{score_text}",
+                    ephemeral=True
+                )
+                session_manager.remove_session(interaction.user.id)
+                logger.info(f"User {interaction.user.id} solved wordplay puzzle correctly")
+            else:
+                # Incorrect answer
+                if session.has_attempts_remaining():
+                    await interaction.response.send_message(
+                        f"❌ Sorry, that's not correct. You have **{session.attempts_remaining}** attempts remaining.\n"
+                        f"Click the button again to try once more!",
+                        ephemeral=True
+                    )
+                    logger.info(f"User {interaction.user.id} incorrect wordplay answer, {session.attempts_remaining} attempts left")
+                else:
+                    # No more attempts
+                    await interaction.response.send_message(
+                        f"❌ Sorry, no more attempts remaining!\n\n"
+                        f"The correct answer was **{session.extra_letter}**.\n"
+                        f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
+                        f"Better luck next time! Use `/wordplay` to try another puzzle.",
+                        ephemeral=True
+                    )
+                    session_manager.remove_session(interaction.user.id)
+                    logger.info(f"User {interaction.user.id} failed wordplay puzzle - no attempts remaining")
+        
+        except Exception as e:
+            logger.error(f"Error in wordplay answer modal: {e}", exc_info=True)
+            await interaction.response.send_message(
+                "❌ An error occurred while checking your answer. Please try again.",
+                ephemeral=True
+            )
+
+
+# View with button to open the modal
+class WordplayAnswerView(discord.ui.View):
+    """View with a button to submit an answer to the wordplay puzzle."""
+    
+    def __init__(self):
+        super().__init__(timeout=None)  # No timeout since puzzles don't expire
+    
+    @discord.ui.button(label="Submit Answer", style=discord.ButtonStyle.primary, emoji="✍️")
+    async def submit_answer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open the modal for submitting an answer."""
+        # Check if the user has an active session
+        session = session_manager.get_session(interaction.user.id)
+        
+        if not session:
+            await interaction.response.send_message(
+                "❌ You don't have an active wordplay puzzle. Use `/wordplay` to start a new puzzle.",
+                ephemeral=True
+            )
+            return
+        
+        # Open the modal
+        await interaction.response.send_modal(WordplayAnswerModal())
+
+
 @bot.tree.command(name='wordplay', description='Play a wordplay puzzle - guess the extra letter!')
 async def wordplay_slash(interaction: discord.Interaction):
     """Start a wordplay puzzle where users guess the extra letter between two words."""
@@ -1123,14 +1184,10 @@ async def wordplay_slash(interaction: discord.Interaction):
         
         # Check if user already has an active session
         existing_session = session_manager.get_session(interaction.user.id)
-        if existing_session and not existing_session.is_expired():
-            # Calculate remaining time, ensuring it's not negative
-            time_remaining = existing_session.created_at + timedelta(minutes=SESSION_TIMEOUT_MINUTES) - datetime.now()
-            minutes_remaining = max(0, int(time_remaining.total_seconds() / 60))
-            
+        if existing_session:
             await interaction.response.send_message(
                 f"❌ You already have an active wordplay puzzle! You have {existing_session.attempts_remaining} attempts remaining.\n"
-                f"The puzzle will expire in {minutes_remaining} minutes.",
+                f"Complete your current puzzle before starting a new one.",
                 ephemeral=True
             )
             return
@@ -1205,12 +1262,16 @@ async def wordplay_slash(interaction: discord.Interaction):
         except (discord.NotFound, discord.HTTPException) as e:
             logger.warning(f"Could not delete status message: {e}")
         
+        # Generate a unique puzzle ID with microseconds to ensure uniqueness
+        puzzle_id = f"{interaction.user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        
         # Create session for this user
         session = session_manager.create_session(
             interaction.user.id,
             shorter_word,
             longer_word,
-            extra_letter
+            extra_letter,
+            puzzle_id
         )
         
         # Record usage for rate limiting
@@ -1258,8 +1319,8 @@ async def wordplay_slash(interaction: discord.Interaction):
                 "One word is identical to the other except for **one additional letter**.\n\n"
                 "**Your task:** Find the extra letter that turns the shorter word into the longer word.\n\n"
                 f"💡 **Hint:** The words differ by exactly one letter, and letter order stays the same.\n"
-                f"⏱️ **Time limit:** 10 minutes\n"
-                f"🎲 **Attempts:** {session.attempts_remaining} remaining"
+                f"🎲 **Attempts:** {session.attempts_remaining} remaining\n"
+                f"🏆 **Reward:** 1 point for solving correctly!"
             ),
             color=discord.Color.blue()
         )
@@ -1277,16 +1338,20 @@ async def wordplay_slash(interaction: discord.Interaction):
         
         embed.add_field(
             name="How to answer:",
-            value="Reply to this message with a single letter (A-Z)",
+            value="Click the 'Submit Answer' button below to enter your guess!",
             inline=False
         )
         
         embed.set_footer(text="Good luck! 🍀")
         
+        # Create view with answer button
+        view = WordplayAnswerView()
+        
         # Send the puzzle
         await interaction.followup.send(
             embed=embed,
-            files=[file1, file2]
+            files=[file1, file2],
+            view=view
         )
         
         logger.info(f"Wordplay puzzle sent to user {interaction.user.id}")

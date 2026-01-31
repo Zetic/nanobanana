@@ -177,7 +177,8 @@ class UsageTracker:
                     "requests_count": 0,
                     "first_use": datetime.now().isoformat(),
                     "last_use": datetime.now().isoformat(),
-                    "usage_timestamps": []  # List of timestamps for each image generation
+                    "usage_timestamps": [],  # List of timestamps for each image generation
+                    "wordplay_score": 0  # Score for wordplay puzzles
                 }
             
             user_data = data["users"][user_id_str]
@@ -415,6 +416,62 @@ class UsageTracker:
     def is_elevated_user(self, user_id: int) -> bool:
         """Check if a user has elevated status."""
         return user_id in config.ELEVATED_USERS
+    
+    def get_wordplay_score(self, user_id: int) -> int:
+        """
+        Get the wordplay score for a user.
+        Returns 0 if user has no score.
+        """
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            if user_id_str not in data["users"]:
+                return 0
+            
+            return data["users"][user_id_str].get("wordplay_score", 0)
+    
+    def increment_wordplay_score(self, user_id: int, username: str) -> int:
+        """
+        Increment the wordplay score for a user.
+        
+        Args:
+            user_id: Discord user ID
+            username: Discord username (for display purposes)
+        
+        Returns:
+            New wordplay score
+        """
+        with self._lock:
+            data = self._load_usage_data()
+            user_id_str = str(user_id)
+            
+            # Create user entry if it doesn't exist
+            if user_id_str not in data["users"]:
+                data["users"][user_id_str] = {
+                    "username": username,
+                    "total_prompt_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_tokens": 0,
+                    "images_generated": 0,
+                    "requests_count": 0,
+                    "first_use": datetime.now().isoformat(),
+                    "last_use": datetime.now().isoformat(),
+                    "usage_timestamps": [],
+                    "wordplay_score": 0
+                }
+            
+            # Ensure wordplay_score field exists (for existing users)
+            if "wordplay_score" not in data["users"][user_id_str]:
+                data["users"][user_id_str]["wordplay_score"] = 0
+            
+            # Increment score
+            data["users"][user_id_str]["wordplay_score"] += 1
+            new_score = data["users"][user_id_str]["wordplay_score"]
+            
+            self._save_usage_data(data)
+            logger.info(f"Incremented wordplay score for user {username} ({user_id}): {new_score}")
+            return new_score
 
 # Global instance
 usage_tracker = UsageTracker()
