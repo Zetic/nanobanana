@@ -1096,15 +1096,22 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                 )
                 return
             
-            # Check the answer
+            # Check if user already solved it
+            if interaction.user.id in session.solved_by_users:
+                await interaction.response.send_message(
+                    "✅ You've already solved this puzzle! Great job! 🎉",
+                    ephemeral=True
+                )
+                return
+            
+            # Check the answer for this specific user
             user_answer = self.answer.value.strip()
-            is_correct = session.check_answer(user_answer)
+            is_correct = session.check_answer(interaction.user.id, user_answer)
             
             if is_correct:
-                # Correct answer! Award point if not already awarded
-                if not session.point_awarded:
-                    session.point_awarded = True
-                    session.solved_by_user_id = interaction.user.id
+                # Correct answer! Award point if not already awarded to this user
+                if interaction.user.id not in session.point_awarded_users:
+                    session.point_awarded_users.add(interaction.user.id)
                     new_score = usage_tracker.increment_wordplay_score(
                         interaction.user.id,
                         interaction.user.display_name or interaction.user.name
@@ -1119,27 +1126,28 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                     f"Great job solving the puzzle! 🎊{score_text}",
                     ephemeral=True
                 )
-                session_manager.remove_session(self.message_id)
+                # Don't remove session - let other users attempt it too
                 logger.info(f"User {interaction.user.id} solved wordplay puzzle correctly (message {self.message_id})")
             else:
                 # Incorrect answer
-                if session.has_attempts_remaining():
+                if session.has_attempts_remaining(interaction.user.id):
+                    attempts_left = session.get_attempts_remaining(interaction.user.id)
                     await interaction.response.send_message(
-                        f"❌ Sorry, that's not correct. You have **{session.attempts_remaining}** attempts remaining.\n"
+                        f"❌ Sorry, that's not correct. You have **{attempts_left}** attempts remaining.\n"
                         f"Click the button again to try once more!",
                         ephemeral=True
                     )
-                    logger.info(f"User {interaction.user.id} incorrect wordplay answer, {session.attempts_remaining} attempts left (message {self.message_id})")
+                    logger.info(f"User {interaction.user.id} incorrect wordplay answer, {attempts_left} attempts left (message {self.message_id})")
                 else:
-                    # No more attempts
+                    # No more attempts for this user
                     await interaction.response.send_message(
-                        f"❌ Sorry, no more attempts remaining!\n\n"
+                        f"❌ Sorry, no more attempts remaining for you!\n\n"
                         f"The correct answer was **{session.extra_letter}**.\n"
                         f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
                         f"Better luck next time! Use `/wordplay` to try another puzzle.",
                         ephemeral=True
                     )
-                    session_manager.remove_session(self.message_id)
+                    # Don't remove session - let other users attempt it too
                     logger.info(f"User {interaction.user.id} failed wordplay puzzle - no attempts remaining (message {self.message_id})")
         
         except Exception as e:

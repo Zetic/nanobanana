@@ -25,88 +25,133 @@ class TestWordplaySession(unittest.TestCase):
         self.assertEqual(session.longer_word, "PLANET")
         self.assertEqual(session.extra_letter, "E")
         self.assertEqual(session.puzzle_id, "test_puzzle_1")
-        self.assertEqual(session.attempts_remaining, 3)
-        self.assertFalse(session.solved)
-        self.assertFalse(session.point_awarded)
-        self.assertIsNone(session.solved_by_user_id)
+        self.assertEqual(len(session.user_attempts), 0)  # No attempts yet
+        self.assertEqual(len(session.solved_by_users), 0)  # No solvers yet
+        self.assertEqual(len(session.point_awarded_users), 0)  # No points awarded yet
     
     def test_check_answer_correct(self):
         """Test checking a correct answer."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
-        result = session.check_answer("e")
+        result = session.check_answer(user_id, "e")
         
         self.assertTrue(result)
-        self.assertTrue(session.solved)
-        self.assertEqual(session.attempts_remaining, 3)  # Attempts not decremented on success
+        self.assertIn(user_id, session.solved_by_users)
+        self.assertEqual(session.get_attempts_remaining(user_id), 3)  # Attempts not decremented on success
     
     def test_check_answer_incorrect(self):
         """Test checking an incorrect answer."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
-        result = session.check_answer("a")
+        result = session.check_answer(user_id, "a")
         
         self.assertFalse(result)
-        self.assertFalse(session.solved)
-        self.assertEqual(session.attempts_remaining, 2)
+        self.assertNotIn(user_id, session.solved_by_users)
+        self.assertEqual(session.get_attempts_remaining(user_id), 2)
     
     def test_check_answer_case_insensitive(self):
         """Test that answer checking is case insensitive."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
-        result = session.check_answer("E")
+        result = session.check_answer(user_id, "E")
         
         self.assertTrue(result)
-        self.assertTrue(session.solved)
+        self.assertIn(user_id, session.solved_by_users)
     
     def test_check_answer_invalid_length(self):
         """Test checking an answer with invalid length."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
-        result = session.check_answer("ea")
+        result = session.check_answer(user_id, "ea")
         
         self.assertFalse(result)
-        self.assertFalse(session.solved)
+        self.assertNotIn(user_id, session.solved_by_users)
         # Invalid answers (wrong format) don't decrement attempts
-        self.assertEqual(session.attempts_remaining, 3)
+        self.assertEqual(session.get_attempts_remaining(user_id), 3)
     
     def test_check_answer_non_alphabetic(self):
         """Test checking an answer with non-alphabetic characters."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
-        result = session.check_answer("1")
+        result = session.check_answer(user_id, "1")
         
         self.assertFalse(result)
-        self.assertFalse(session.solved)
+        self.assertNotIn(user_id, session.solved_by_users)
         # Invalid answers (wrong format) don't decrement attempts
-        self.assertEqual(session.attempts_remaining, 3)
+        self.assertEqual(session.get_attempts_remaining(user_id), 3)
     
     def test_has_attempts_remaining(self):
         """Test checking if attempts remain."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
-        self.assertTrue(session.has_attempts_remaining())
+        self.assertTrue(session.has_attempts_remaining(user_id))
         
-        session.check_answer("a")
-        session.check_answer("b")
-        session.check_answer("c")
+        session.check_answer(user_id, "a")
+        session.check_answer(user_id, "b")
+        session.check_answer(user_id, "c")
         
-        self.assertFalse(session.has_attempts_remaining())
+        self.assertFalse(session.has_attempts_remaining(user_id))
     
     def test_point_awarded_tracking(self):
-        """Test that point_awarded flag is tracked correctly."""
+        """Test that point_awarded flag is tracked correctly per user."""
         session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user_id = 111
         
         # Initially no point awarded
-        self.assertFalse(session.point_awarded)
+        self.assertNotIn(user_id, session.point_awarded_users)
         
         # After solving, point should be manually awarded in application logic
-        session.check_answer("e")
-        self.assertTrue(session.solved)
+        session.check_answer(user_id, "e")
+        self.assertIn(user_id, session.solved_by_users)
         
         # The application sets point_awarded flag
-        session.point_awarded = True
-        self.assertTrue(session.point_awarded)
+        session.point_awarded_users.add(user_id)
+        self.assertIn(user_id, session.point_awarded_users)
+    
+    def test_multiple_users_can_solve(self):
+        """Test that multiple users can solve the same puzzle."""
+        session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user1 = 111
+        user2 = 222
+        user3 = 333
+        
+        # User 1 solves correctly
+        result1 = session.check_answer(user1, "e")
+        self.assertTrue(result1)
+        self.assertIn(user1, session.solved_by_users)
+        
+        # User 2 can still solve
+        result2 = session.check_answer(user2, "e")
+        self.assertTrue(result2)
+        self.assertIn(user2, session.solved_by_users)
+        
+        # User 3 gets it wrong but has attempts
+        result3 = session.check_answer(user3, "a")
+        self.assertFalse(result3)
+        self.assertTrue(session.has_attempts_remaining(user3))
+        self.assertEqual(session.get_attempts_remaining(user3), 2)
+    
+    def test_per_user_attempts_are_independent(self):
+        """Test that each user has independent attempts."""
+        session = WordplaySession(999888, 12345, "plant", "planet", "e", "test_puzzle_1")
+        user1 = 111
+        user2 = 222
+        
+        # User 1 uses all attempts
+        session.check_answer(user1, "a")
+        session.check_answer(user1, "b")
+        session.check_answer(user1, "c")
+        self.assertFalse(session.has_attempts_remaining(user1))
+        
+        # User 2 still has all attempts
+        self.assertTrue(session.has_attempts_remaining(user2))
+        self.assertEqual(session.get_attempts_remaining(user2), 3)
 
 
 class TestWordplaySessionManager(unittest.TestCase):
