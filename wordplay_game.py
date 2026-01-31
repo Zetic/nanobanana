@@ -31,7 +31,7 @@ class WordplaySession:
     
     def check_answer(self, answer: str) -> bool:
         """Check if the provided answer is correct."""
-        if not answer or len(answer) != 1:
+        if not answer or len(answer) != 1 or not answer.isalpha():
             return False
         
         is_correct = answer.upper() == self.extra_letter
