@@ -66,6 +66,17 @@ class TestWordplaySession(unittest.TestCase):
         # Invalid answers (wrong format) don't decrement attempts
         self.assertEqual(session.attempts_remaining, 3)
     
+    def test_check_answer_non_alphabetic(self):
+        """Test checking an answer with non-alphabetic characters."""
+        session = WordplaySession(12345, "plant", "planet", "e")
+        
+        result = session.check_answer("1")
+        
+        self.assertFalse(result)
+        self.assertFalse(session.solved)
+        # Invalid answers (wrong format) don't decrement attempts
+        self.assertEqual(session.attempts_remaining, 3)
+    
     def test_has_attempts_remaining(self):
         """Test checking if attempts remain."""
         session = WordplaySession(12345, "plant", "planet", "e")

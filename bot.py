@@ -1124,9 +1124,13 @@ async def wordplay_slash(interaction: discord.Interaction):
         # Check if user already has an active session
         existing_session = session_manager.get_session(interaction.user.id)
         if existing_session and not existing_session.is_expired():
+            # Calculate remaining time, ensuring it's not negative
+            time_remaining = existing_session.created_at + timedelta(minutes=10) - datetime.now()
+            minutes_remaining = max(0, int(time_remaining.total_seconds() / 60))
+            
             await interaction.response.send_message(
                 f"❌ You already have an active wordplay puzzle! You have {existing_session.attempts_remaining} attempts remaining.\n"
-                f"The puzzle will expire in {int((existing_session.created_at + timedelta(minutes=10) - datetime.now()).total_seconds() / 60)} minutes.",
+                f"The puzzle will expire in {minutes_remaining} minutes.",
                 ephemeral=True
             )
             return
@@ -1157,7 +1161,7 @@ async def wordplay_slash(interaction: discord.Interaction):
         # Defer response since this will take time
         await interaction.response.defer()
         
-        # Get the Gemini model generator
+        # Get the Gemini model generator (nanobanana uses gemini-2.5-flash-image by default)
         generator = get_model_generator("nanobanana")
         
         # Generate word pair
@@ -1175,19 +1179,31 @@ async def wordplay_slash(interaction: discord.Interaction):
         logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letter})")
         
         # Generate images for both words
-        await interaction.followup.send("🎨 Generating puzzle images...")
+        status_msg = await interaction.followup.send("🎨 Generating puzzle images...", wait=True)
         
         image1 = await generate_word_image(generator, shorter_word)
         image2 = await generate_word_image(generator, longer_word)
         
         # Check if both images were generated successfully
         if not image1 or not image2:
+            # Delete the status message before showing error
+            try:
+                await status_msg.delete()
+            except:
+                pass
+            
             await interaction.followup.send(
                 "❌ Failed to generate puzzle images. Please try again.",
                 ephemeral=True
             )
             logger.error(f"Failed to generate images for word pair: {shorter_word}, {longer_word}")
             return
+        
+        # Delete the status message before showing the puzzle
+        try:
+            await status_msg.delete()
+        except:
+            pass
         
         # Create session for this user
         session = session_manager.create_session(
@@ -1198,13 +1214,15 @@ async def wordplay_slash(interaction: discord.Interaction):
         )
         
         # Record usage for rate limiting
+        # Note: Token counting is handled internally by the model generator
+        # For wordplay, we primarily track image generation count for rate limiting
         usage_tracker.record_usage(
             user_id=interaction.user.id,
             username=interaction.user.display_name or interaction.user.name,
-            prompt_tokens=0,  # Actual token counting handled by model
+            prompt_tokens=0,
             output_tokens=0,
             total_tokens=0,
-            images_generated=2
+            images_generated=2  # Two images generated per puzzle
         )
         
         # Save images to buffers for Discord

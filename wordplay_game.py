@@ -159,7 +159,12 @@ Do not include any other text, explanations, or formatting."""
             elif line.startswith('LONGER:'):
                 longer_word = line.split(':', 1)[1].strip().upper()
             elif line.startswith('EXTRA:'):
-                extra_letter = line.split(':', 1)[1].strip().upper()
+                extra_letter_raw = line.split(':', 1)[1].strip().upper()
+                # Validate that extra letter is a single character
+                if len(extra_letter_raw) != 1:
+                    logger.error(f"Extra letter must be a single character, got: {extra_letter_raw}")
+                    return None
+                extra_letter = extra_letter_raw
         
         if not all([shorter_word, longer_word, extra_letter]):
             logger.error(f"Failed to parse word pair from response: {text_response}")
