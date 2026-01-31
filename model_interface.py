@@ -130,7 +130,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             # Add aspect ratio to image config if specified
             if aspect_ratio:
                 config_params["image_config"] = types.ImageConfig(
-                    aspect_ratio=aspect_ratio
+                    aspectRatio=aspect_ratio
                 )
             
             response = self.client.models.generate_content(
@@ -187,7 +187,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             # Add aspect ratio to image config if specified
             if aspect_ratio:
                 config_params["image_config"] = types.ImageConfig(
-                    aspect_ratio=aspect_ratio
+                    aspectRatio=aspect_ratio
                 )
             
             response = self.client.models.generate_content(
