@@ -20,12 +20,12 @@ SESSION_CLEANUP_INTERVAL = 300  # Cleanup runs every 5 minutes (in seconds)
 class WordplaySession:
     """Represents a single wordplay game session for a message."""
     
-    def __init__(self, message_id: int, creator_user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str):
+    def __init__(self, message_id: int, creator_user_id: int, shorter_word: str, longer_word: str, extra_letters: str, puzzle_id: str):
         self.message_id = message_id
         self.creator_user_id = creator_user_id  # User who created the puzzle
         self.shorter_word = shorter_word.upper()
         self.longer_word = longer_word.upper()
-        self.extra_letter = extra_letter.upper()
+        self.extra_letters = extra_letters.upper()
         self.puzzle_id = puzzle_id  # Unique identifier for this puzzle
         self.created_at = datetime.now()
         self.user_attempts: Dict[int, int] = {}  # user_id -> attempts_remaining
@@ -34,14 +34,25 @@ class WordplaySession:
     
     def check_answer(self, user_id: int, answer: str) -> bool:
         """Check if the provided answer is correct for a specific user."""
-        if not answer or len(answer) != 1 or not answer.isalpha():
+        if not answer:
+            return False
+        
+        # Clean the answer - remove spaces, commas, and convert to uppercase
+        cleaned_answer = ''.join(answer.upper().split()).replace(',', '')
+        
+        # Validate that all characters are alphabetic
+        if not cleaned_answer.isalpha():
+            return False
+        
+        # Check if the length matches expected extra_letters length
+        if len(cleaned_answer) != len(self.extra_letters):
             return False
         
         # Initialize attempts for this user if they haven't tried yet
         if user_id not in self.user_attempts:
             self.user_attempts[user_id] = 3
         
-        is_correct = answer.upper() == self.extra_letter
+        is_correct = cleaned_answer == self.extra_letters
         if is_correct:
             self.solved_by_users.add(user_id)
         else:
@@ -67,13 +78,13 @@ class WordplaySessionManager:
         self.sessions: Dict[int, WordplaySession] = {}  # message_id -> session
         self._cleanup_task = None
     
-    def create_session(self, message_id: int, creator_user_id: int, shorter_word: str, longer_word: str, extra_letter: str, puzzle_id: str) -> WordplaySession:
+    def create_session(self, message_id: int, creator_user_id: int, shorter_word: str, longer_word: str, extra_letters: str, puzzle_id: str) -> WordplaySession:
         """Create a new session for a message."""
         # Clean up any existing session for this message
         if message_id in self.sessions:
             del self.sessions[message_id]
         
-        session = WordplaySession(message_id, creator_user_id, shorter_word, longer_word, extra_letter, puzzle_id)
+        session = WordplaySession(message_id, creator_user_id, shorter_word, longer_word, extra_letters, puzzle_id)
         self.sessions[message_id] = session
         logger.info(f"Created wordplay session for message {message_id} by user {creator_user_id}: {shorter_word} -> {longer_word} (puzzle_id: {puzzle_id})")
         return session
@@ -118,35 +129,54 @@ class WordplaySessionManager:
 session_manager = WordplaySessionManager()
 
 
-async def generate_word_pair_with_gemini(generator) -> Optional[Tuple[str, str, str]]:
+async def generate_word_pair_with_gemini(generator, min_word_length: int = 4, letter_difference: int = 1) -> Optional[Tuple[str, str, str]]:
     """
     Generate a valid word pair using Gemini AI.
     
+    Args:
+        generator: The model generator to use
+        min_word_length: Minimum length for the shorter word (default: 4)
+        letter_difference: Number of letters to add (default: 1)
+    
     Returns:
-        Tuple of (shorter_word, longer_word, extra_letter) or None if generation fails
+        Tuple of (shorter_word, longer_word, extra_letters) or None if generation fails
     """
-    prompt = """Generate a word pair that follows these EXACT rules:
-
-RULES (ALL MUST BE SATISFIED):
-1. Two English words only
-2. Both words must be common nouns and/or verbs (no proper nouns, slang, or abbreviations)
-3. One word is formed by inserting ONE additional letter into the other word
-4. The letter order must stay the same (the shorter word is a subsequence of the longer word)
-5. NOT simple pluralization (no adding just 's' or 'es')
-6. The extra letter can be inserted anywhere in the word
-7. Both words must be visually representable in an image
-
-EXAMPLES OF VALID PAIRS:
+    # Determine the letter difference rules
+    if letter_difference == 1:
+        letter_rule = "3. One word is formed by inserting ONE additional letter into the other word"
+        extra_format = "EXTRA: [letter]"
+        examples = """EXAMPLES OF VALID PAIRS:
 - PLANT → PLANET (extra letter: E)
 - STAR → STAIR (extra letter: I)
 - PLAN → PLAIN (extra letter: I)
 - MATE → MATTE (extra letter: T)
-- SCAR → SCARE (extra letter: E)
+- SCAR → SCARE (extra letter: E)"""
+    else:
+        letter_rule = f"3. One word is formed by inserting EXACTLY {letter_difference} additional letters into the other word"
+        extra_format = f"EXTRA: [comma-separated list of {letter_difference} letters in insertion order]"
+        examples = f"""EXAMPLES OF VALID PAIRS (for {letter_difference} letters):
+- For 2 letters: PLAN → PLANET (extra letters: E, T)
+- For 2 letters: STAR → STAIRS (extra letters: I, S)"""
+    
+    prompt = f"""Generate a word pair that follows these EXACT rules:
+
+RULES (ALL MUST BE SATISFIED):
+1. Two English words only
+2. Both words must be common nouns and/or verbs (no proper nouns, slang, or abbreviations)
+{letter_rule}
+4. The letter order must stay the same (the shorter word is a subsequence of the longer word)
+5. NOT simple pluralization (no adding just 's' or 'es')
+6. The extra letter(s) can be inserted anywhere in the word
+7. Both words must be visually representable in an image
+8. The shorter word must be at least {min_word_length} letters long
+9. Both words should be distinctly different in meaning to make the puzzle challenging
+
+{examples}
 
 RESPOND WITH ONLY THREE LINES IN THIS EXACT FORMAT:
 SHORTER: [word]
 LONGER: [word]
-EXTRA: [letter]
+{extra_format}
 
 Do not include any other text, explanations, or formatting."""
 
@@ -163,7 +193,7 @@ Do not include any other text, explanations, or formatting."""
         
         shorter_word = None
         longer_word = None
-        extra_letter = None
+        extra_letters = None
         
         for line in lines:
             if line.startswith('SHORTER:'):
@@ -171,86 +201,158 @@ Do not include any other text, explanations, or formatting."""
             elif line.startswith('LONGER:'):
                 longer_word = line.split(':', 1)[1].strip().upper()
             elif line.startswith('EXTRA:'):
-                extra_letter_raw = line.split(':', 1)[1].strip().upper()
-                # Validate that extra letter is a single character
-                if len(extra_letter_raw) != 1:
-                    logger.error(f"Extra letter must be a single character, got: {extra_letter_raw}")
+                extra_letters_raw = line.split(':', 1)[1].strip().upper()
+                # Parse the extra letters (could be single letter or comma-separated list)
+                if ',' in extra_letters_raw:
+                    # Multiple letters case
+                    extra_letters = ''.join([l.strip() for l in extra_letters_raw.split(',')])
+                else:
+                    # Single letter case
+                    extra_letters = extra_letters_raw.strip()
+                
+                # Validate that we have the expected number of letters
+                if len(extra_letters) != letter_difference:
+                    logger.error(f"Extra letters must be {letter_difference} character(s), got: {extra_letters}")
                     return None
-                extra_letter = extra_letter_raw
         
-        if not all([shorter_word, longer_word, extra_letter]):
+        if not all([shorter_word, longer_word, extra_letters]):
             logger.error(f"Failed to parse word pair from response: {text_response}")
             return None
         
         # Validate the word pair
-        if not validate_word_pair(shorter_word, longer_word, extra_letter):
-            logger.error(f"Invalid word pair generated: {shorter_word} -> {longer_word} (extra: {extra_letter})")
+        if not validate_word_pair(shorter_word, longer_word, extra_letters):
+            logger.error(f"Invalid word pair generated: {shorter_word} -> {longer_word} (extra: {extra_letters})")
             return None
         
-        logger.info(f"Generated valid word pair: {shorter_word} -> {longer_word} (extra: {extra_letter})")
-        return shorter_word, longer_word, extra_letter
+        logger.info(f"Generated valid word pair: {shorter_word} -> {longer_word} (extra: {extra_letters})")
+        return shorter_word, longer_word, extra_letters
         
     except Exception as e:
         logger.error(f"Error generating word pair: {e}")
         return None
 
 
-def validate_word_pair(shorter_word: str, longer_word: str, extra_letter: str) -> bool:
+def validate_word_pair(shorter_word: str, longer_word: str, extra_letters: str) -> bool:
     """
     Validate that a word pair follows the Extra-Letter rule.
     
     Args:
         shorter_word: The shorter word
         longer_word: The longer word
-        extra_letter: The extra letter
+        extra_letters: The extra letter(s) as a string
     
     Returns:
         True if valid, False otherwise
     """
     # Basic validation
-    if not all([shorter_word, longer_word, extra_letter]):
+    if not all([shorter_word, longer_word, extra_letters]):
         return False
     
-    if len(extra_letter) != 1:
+    # Longer word should be exactly N characters longer
+    letter_diff = len(extra_letters)
+    if len(longer_word) != len(shorter_word) + letter_diff:
         return False
     
-    # Longer word should be exactly 1 character longer
-    if len(longer_word) != len(shorter_word) + 1:
+    # Check if removing occurrences of the extra letters from longer_word gives shorter_word
+    # This is a more complex check when letter_diff > 1
+    # We need to ensure that we can remove exactly the letters in extra_letters to get shorter_word
+    
+    # Convert to list for easier manipulation
+    longer_list = list(longer_word)
+    extra_list = list(extra_letters)
+    
+    # Try to find a valid sequence of positions to remove
+    def can_remove_letters(word_list, letters_to_remove, current_idx=0, remove_count=0):
+        """Recursively check if we can remove the specified letters to get the shorter word."""
+        if remove_count == len(letters_to_remove):
+            # We've removed all required letters, check if result matches shorter_word
+            result = ''.join([c for i, c in enumerate(longer_list) if i not in positions_removed])
+            return result == shorter_word
+        
+        if current_idx >= len(word_list):
+            return False
+        
+        letter_to_remove = letters_to_remove[remove_count]
+        
+        # Try removing at each valid position
+        for i in range(current_idx, len(word_list)):
+            if word_list[i] == letter_to_remove and i not in positions_removed:
+                positions_removed.add(i)
+                if can_remove_letters(word_list, letters_to_remove, i + 1, remove_count + 1):
+                    return True
+                positions_removed.remove(i)
+        
         return False
     
-    # Check if removing one occurrence of the extra letter from longer_word gives shorter_word
-    # Try removing the extra letter at each position
-    for i in range(len(longer_word)):
-        if longer_word[i] == extra_letter:
-            # Create a word with this letter removed
-            test_word = longer_word[:i] + longer_word[i+1:]
-            if test_word == shorter_word:
-                return True
-    
-    return False
+    positions_removed = set()
+    return can_remove_letters(longer_list, extra_list)
 
 
-async def generate_word_image(generator, word: str) -> Optional[Image.Image]:
+async def generate_word_image(generator, word: str, style: Optional[str] = None) -> Optional[Image.Image]:
     """
     Generate an image representing a word using Gemini.
     
     Args:
         generator: The model generator to use
         word: The word to visualize
+        style: Optional style theme for the image (e.g., "anime", "watercolor", etc.)
     
     Returns:
         PIL Image or None if generation fails
     """
-    prompt = f"""Create a clear, simple image that represents the word "{word}".
+    if style:
+        # Generate a style-based prompt using AI
+        style_prompt = f"""Generate an image generation prompt for the word "{word}" in the style of "{style}".
+
+The prompt should:
+- Describe how to visually represent the word "{word}" in the {style} style
+- Be suitable for a word guessing puzzle
+- Not include any text or letters in the image
+- Focus on clear, recognizable representation despite the artistic style
+
+Create a detailed prompt that captures the essence of the {style} style while making the word "{word}" recognizable."""
+        
+        try:
+            # Get style-based prompt from AI
+            _, generated_prompt, _ = await generator.generate_text_only_response(style_prompt)
+            if generated_prompt:
+                prompt = generated_prompt.strip()
+                logger.info(f"Generated style-based prompt for {word} in {style} style")
+            else:
+                # Fallback to default if generation fails
+                logger.warning(f"Failed to generate style-based prompt, using default")
+                prompt = f"""Create a {style} style image that represents the word "{word}".
 
 The image should:
-- Be a straightforward visual representation of the word
-- Be easily recognizable
-- Have good contrast and clear details
-- Be suitable for a word guessing puzzle
+- Be in the {style} artistic style
+- Be a clear visual representation of the word
 - Not include any text or letters
+- Be suitable for a word guessing puzzle"""
+        except Exception as e:
+            logger.error(f"Error generating style-based prompt: {e}")
+            prompt = f"""Create a {style} style image that represents the word "{word}".
 
-Create the image in a simple, clean style."""
+The image should:
+- Be in the {style} artistic style
+- Be a clear visual representation of the word
+- Not include any text or letters
+- Be suitable for a word guessing puzzle"""
+    else:
+        # Use the default monochrome graphite pencil style
+        prompt = f"""Create a monochrome graphite pencil illustration that represents the word "{word}".
+
+The image should:
+- Be hand-drawn in appearance, like a traditional sketch
+- Use fine linework with light cross-hatching for shading
+- Be black and gray only (no color)
+- Have a soft, slightly rough paper texture
+- Focus on clear silhouette and readable shapes
+- Avoid heavy fills or solid blacks
+- Look like classical concept art or an academic drawing study
+- Not include any text or letters
+- Be suitable for a word guessing puzzle
+
+"""
 
     try:
         image, _, _ = await generator.generate_image_from_text(prompt, aspect_ratio="1:1")
