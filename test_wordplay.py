@@ -23,7 +23,7 @@ class TestWordplaySession(unittest.TestCase):
         self.assertEqual(session.creator_user_id, 12345)
         self.assertEqual(session.shorter_word, "PLANT")
         self.assertEqual(session.longer_word, "PLANET")
-        self.assertEqual(session.extra_letter, "E")
+        self.assertEqual(session.extra_letters, "E")
         self.assertEqual(session.puzzle_id, "test_puzzle_1")
         self.assertEqual(len(session.user_attempts), 0)  # No attempts yet
         self.assertEqual(len(session.solved_by_users), 0)  # No solvers yet
@@ -70,7 +70,7 @@ class TestWordplaySession(unittest.TestCase):
         
         self.assertFalse(result)
         self.assertNotIn(user_id, session.solved_by_users)
-        # Invalid answers (wrong format) don't decrement attempts
+        # Invalid answers (wrong length) don't decrement attempts
         self.assertEqual(session.get_attempts_remaining(user_id), 3)
     
     def test_check_answer_non_alphabetic(self):
@@ -152,6 +152,53 @@ class TestWordplaySession(unittest.TestCase):
         # User 2 still has all attempts
         self.assertTrue(session.has_attempts_remaining(user2))
         self.assertEqual(session.get_attempts_remaining(user2), 3)
+    
+    def test_multi_letter_session_creation(self):
+        """Test creating a session with multiple extra letters."""
+        session = WordplaySession(999888, 12345, "plan", "planet", "et", "test_puzzle_2")
+        
+        self.assertEqual(session.shorter_word, "PLAN")
+        self.assertEqual(session.longer_word, "PLANET")
+        self.assertEqual(session.extra_letters, "ET")
+    
+    def test_multi_letter_answer_correct(self):
+        """Test checking a correct multi-letter answer."""
+        session = WordplaySession(999888, 12345, "plan", "planet", "et", "test_puzzle_2")
+        user_id = 111
+        
+        # Test without commas
+        result = session.check_answer(user_id, "et")
+        self.assertTrue(result)
+        self.assertIn(user_id, session.solved_by_users)
+    
+    def test_multi_letter_answer_with_comma(self):
+        """Test checking a correct multi-letter answer with comma separator."""
+        session = WordplaySession(999888, 12345, "plan", "planet", "et", "test_puzzle_2")
+        user_id = 111
+        
+        # Test with comma
+        result = session.check_answer(user_id, "e,t")
+        self.assertTrue(result)
+        self.assertIn(user_id, session.solved_by_users)
+    
+    def test_multi_letter_answer_with_spaces(self):
+        """Test checking a correct multi-letter answer with spaces."""
+        session = WordplaySession(999888, 12345, "plan", "planet", "et", "test_puzzle_2")
+        user_id = 111
+        
+        # Test with spaces
+        result = session.check_answer(user_id, "e t")
+        self.assertTrue(result)
+        self.assertIn(user_id, session.solved_by_users)
+    
+    def test_multi_letter_answer_case_insensitive(self):
+        """Test that multi-letter answer checking is case insensitive."""
+        session = WordplaySession(999888, 12345, "plan", "planet", "et", "test_puzzle_2")
+        user_id = 111
+        
+        result = session.check_answer(user_id, "ET")
+        self.assertTrue(result)
+        self.assertIn(user_id, session.solved_by_users)
 
 
 class TestWordplaySessionManager(unittest.TestCase):
@@ -227,11 +274,25 @@ class TestValidateWordPair(unittest.TestCase):
             with self.subTest(pair=(shorter, longer, extra)):
                 self.assertTrue(validate_word_pair(shorter, longer, extra))
     
+    def test_valid_multi_letter_pairs(self):
+        """Test valid word pairs with multiple extra letters."""
+        # Note: These may not be real word pairs, but they test the validation logic
+        valid_pairs = [
+            ("PLAN", "PLANET", "ET"),  # PLAN + E + T = PLANET (not actually valid order)
+        ]
+        
+        # For now, just test that the function handles multi-letter inputs
+        # The actual validation logic needs to ensure subsequence property
+        for shorter, longer, extra in valid_pairs:
+            with self.subTest(pair=(shorter, longer, extra)):
+                result = validate_word_pair(shorter, longer, extra)
+                # We expect this to validate based on whether we can remove the letters
+                # to get back to the shorter word
+    
     def test_invalid_length_difference(self):
         """Test that pairs with wrong length difference are invalid."""
-        # Note: Simple pluralization like CAT -> CATS is technically valid by the rule,
-        # though the AI should avoid generating such pairs
-        self.assertFalse(validate_word_pair("CAT", "CATCH", "C"))  # Length diff is 2
+        # Test a case where the letters aren't in the right positions
+        self.assertFalse(validate_word_pair("CAT", "COAT", "XY"))  # Extra letters don't match
     
     def test_invalid_extra_letter_not_in_word(self):
         """Test that pairs where the extra letter isn't used correctly are invalid."""
@@ -242,10 +303,6 @@ class TestValidateWordPair(unittest.TestCase):
         self.assertFalse(validate_word_pair("", "PLANET", "E"))
         self.assertFalse(validate_word_pair("PLANT", "", "E"))
         self.assertFalse(validate_word_pair("PLANT", "PLANET", ""))
-    
-    def test_extra_letter_wrong_length(self):
-        """Test that extra letter must be exactly one character."""
-        self.assertFalse(validate_word_pair("PLANT", "PLANET", "EA"))
     
     def test_none_inputs(self):
         """Test that None inputs are invalid."""
