@@ -1070,18 +1070,31 @@ async def connect_slash(interaction: discord.Interaction):
 class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
     """Modal for submitting a wordplay puzzle answer."""
     
-    answer = discord.ui.TextInput(
-        label="Enter the extra letter",
-        placeholder="Type a single letter (A-Z)",
-        min_length=1,
-        max_length=1,
-        required=True,
-        style=discord.TextStyle.short
-    )
-    
-    def __init__(self, message_id: int):
+    def __init__(self, message_id: int, letter_count: int = 1):
         super().__init__()
         self.message_id = message_id
+        
+        # Create dynamic text input based on expected letter count
+        if letter_count == 1:
+            label = "Enter the extra letter"
+            placeholder = "Type a single letter (A-Z)"
+        else:
+            label = f"Enter the {letter_count} extra letters"
+            placeholder = f"Type {letter_count} letters (e.g., ABC or A,B,C)"
+        
+        # Calculate max length: letters + (letter_count - 1) separators + buffer for spaces
+        SEPARATOR_BUFFER = 10  # Extra space for commas and spaces
+        max_input_length = letter_count + (letter_count - 1) + SEPARATOR_BUFFER
+        
+        self.answer = discord.ui.TextInput(
+            label=label,
+            placeholder=placeholder,
+            min_length=letter_count,
+            max_length=max_input_length,
+            required=True,
+            style=discord.TextStyle.short
+        )
+        self.add_item(self.answer)
     
     async def on_submit(self, interaction: discord.Interaction):
         """Handle the modal submission."""
@@ -1121,7 +1134,7 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                     score_text = ""
                 
                 await interaction.response.send_message(
-                    f"🎉 **Correct!** The extra letter is **{session.extra_letter}**!\n\n"
+                    f"🎉 **Correct!** The extra letter{'s' if len(session.extra_letters) > 1 else ''} {'are' if len(session.extra_letters) > 1 else 'is'} **{session.extra_letters}**!\n\n"
                     f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n"
                     f"Great job solving the puzzle! 🎊{score_text}",
                     ephemeral=True
@@ -1142,7 +1155,7 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
                     # No more attempts for this user
                     await interaction.response.send_message(
                         f"❌ Sorry, no more attempts remaining for you!\n\n"
-                        f"The correct answer was **{session.extra_letter}**.\n"
+                        f"The correct answer was **{session.extra_letters}**.\n"
                         f"The word pair was: **{session.shorter_word}** → **{session.longer_word}**\n\n"
                         f"Better luck next time! Use `/wordplay` to try another puzzle.",
                         ephemeral=True
@@ -1187,15 +1200,46 @@ class WordplayAnswerView(discord.ui.View):
             )
             return
         
-        # Open the modal with the message_id
-        modal = WordplayAnswerModal(self.message_id)
+        # Get the expected letter count from session
+        letter_count = len(session.extra_letters)
+        
+        # Open the modal with the message_id and letter_count
+        modal = WordplayAnswerModal(self.message_id, letter_count)
         await interaction.response.send_modal(modal)
 
 
 @bot.tree.command(name='wordplay', description='Play a wordplay puzzle - guess the extra letter!')
-async def wordplay_slash(interaction: discord.Interaction):
+@app_commands.describe(
+    word_length='Minimum length for the shorter word (default: 4)',
+    letter_difference='Number of letters to add/remove (default: 1)',
+    style='Art style for the images (e.g., "anime", "watercolor"). Default is graphite pencil sketch.'
+)
+async def wordplay_slash(
+    interaction: discord.Interaction,
+    word_length: Optional[int] = None,
+    letter_difference: Optional[int] = None,
+    style: Optional[str] = None
+):
     """Start a wordplay puzzle where users guess the extra letter between two words."""
     try:
+        # Set defaults
+        min_word_length = word_length if word_length is not None else 4
+        num_letters = letter_difference if letter_difference is not None else 1
+        
+        # Validate parameters
+        if min_word_length < 3:
+            await interaction.response.send_message(
+                "❌ Minimum word length must be at least 3 letters.",
+                ephemeral=True
+            )
+            return
+        
+        if num_letters < 1 or num_letters > 5:
+            await interaction.response.send_message(
+                "❌ Letter difference must be between 1 and 5.",
+                ephemeral=True
+            )
+            return
         # Check if interaction is from a DM channel and user is not elevated
         if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
             await interaction.response.send_message(
@@ -1234,8 +1278,8 @@ async def wordplay_slash(interaction: discord.Interaction):
         # Get the Gemini model generator (nanobanana uses gemini-2.5-flash-image by default)
         generator = get_model_generator("nanobanana")
         
-        # Generate word pair
-        word_pair = await generate_word_pair_with_gemini(generator)
+        # Generate word pair with custom parameters
+        word_pair = await generate_word_pair_with_gemini(generator, min_word_length, num_letters)
         
         if not word_pair:
             await interaction.followup.send(
@@ -1245,14 +1289,14 @@ async def wordplay_slash(interaction: discord.Interaction):
             logger.error(f"Failed to generate word pair for user {interaction.user.id}")
             return
         
-        shorter_word, longer_word, extra_letter = word_pair
-        logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letter})")
+        shorter_word, longer_word, extra_letters = word_pair
+        logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letters})")
         
         # Generate images for both words
         status_msg = await interaction.followup.send("🎨 Generating puzzle images...", wait=True)
         
-        image1 = await generate_word_image(generator, shorter_word)
-        image2 = await generate_word_image(generator, longer_word)
+        image1 = await generate_word_image(generator, shorter_word, style)
+        image2 = await generate_word_image(generator, longer_word, style)
         
         # Check if both images were generated successfully
         if not image1 or not image2:
@@ -1315,14 +1359,19 @@ async def wordplay_slash(interaction: discord.Interaction):
         file2 = discord.File(img2_buffer, filename=filename2)
         
         # Create embed with puzzle (we'll update attempts count after creating session)
+        # Prepare text for singular/plural handling
+        letter_text = f"{num_letters} additional letter{'s' if num_letters > 1 else ''}"
+        letter_plural = 's' if num_letters > 1 else ''
+        verb_form = 's' if num_letters == 1 else ''
+        
         embed = discord.Embed(
             title="🎯 Wordplay Puzzle",
             description=(
-                "**Two images, two words, one extra letter!**\n\n"
+                f"**Two images, two words, {letter_text}!**\n\n"
                 "Look at the images below. Each represents a different word.\n"
-                "One word is identical to the other except for **one additional letter**.\n\n"
-                "**Your task:** Find the extra letter that turns the shorter word into the longer word.\n\n"
-                f"💡 **Hint:** The words differ by exactly one letter, and letter order stays the same.\n"
+                f"One word is identical to the other except for **{letter_text}**.\n\n"
+                f"**Your task:** Find the extra letter{letter_plural} that turn{verb_form} the shorter word into the longer word.\n\n"
+                f"💡 **Hint:** The words differ by exactly {num_letters} letter{letter_plural}, and letter order stays the same.\n"
                 f"🎲 **Attempts:** 3 remaining\n"
                 f"🏆 **Reward:** 1 point for solving correctly!"
             ),
@@ -1361,7 +1410,7 @@ async def wordplay_slash(interaction: discord.Interaction):
             interaction.user.id,
             shorter_word,
             longer_word,
-            extra_letter,
+            extra_letters,
             puzzle_id
         )
         
