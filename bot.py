@@ -1082,11 +1082,15 @@ class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
             label = f"Enter the {letter_count} extra letters"
             placeholder = f"Type {letter_count} letters (e.g., ABC or A,B,C)"
         
+        # Calculate max length: letters + (letter_count - 1) separators + buffer for spaces
+        SEPARATOR_BUFFER = 10  # Extra space for commas and spaces
+        max_input_length = letter_count + (letter_count - 1) + SEPARATOR_BUFFER
+        
         self.answer = discord.ui.TextInput(
             label=label,
             placeholder=placeholder,
             min_length=letter_count,
-            max_length=letter_count * 2 + 10,  # Allow for commas and spaces
+            max_length=max_input_length,
             required=True,
             style=discord.TextStyle.short
         )
@@ -1355,15 +1359,19 @@ async def wordplay_slash(
         file2 = discord.File(img2_buffer, filename=filename2)
         
         # Create embed with puzzle (we'll update attempts count after creating session)
+        # Prepare text for singular/plural handling
         letter_text = f"{num_letters} additional letter{'s' if num_letters > 1 else ''}"
+        letter_plural = 's' if num_letters > 1 else ''
+        verb_form = 's' if num_letters == 1 else ''
+        
         embed = discord.Embed(
             title="🎯 Wordplay Puzzle",
             description=(
                 f"**Two images, two words, {letter_text}!**\n\n"
                 "Look at the images below. Each represents a different word.\n"
                 f"One word is identical to the other except for **{letter_text}**.\n\n"
-                f"**Your task:** Find the extra letter{'s' if num_letters > 1 else ''} that turn{'s' if num_letters == 1 else ''} the shorter word into the longer word.\n\n"
-                f"💡 **Hint:** The words differ by exactly {num_letters} letter{'s' if num_letters > 1 else ''}, and letter order stays the same.\n"
+                f"**Your task:** Find the extra letter{letter_plural} that turn{verb_form} the shorter word into the longer word.\n\n"
+                f"💡 **Hint:** The words differ by exactly {num_letters} letter{letter_plural}, and letter order stays the same.\n"
                 f"🎲 **Attempts:** 3 remaining\n"
                 f"🏆 **Reward:** 1 point for solving correctly!"
             ),

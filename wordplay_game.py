@@ -254,7 +254,6 @@ def validate_word_pair(shorter_word: str, longer_word: str, extra_letters: str) 
         return False
     
     # Check if removing occurrences of the extra letters from longer_word gives shorter_word
-    # This is a more complex check when letter_diff > 1
     # We need to ensure that we can remove exactly the letters in extra_letters to get shorter_word
     
     # Convert to list for easier manipulation
@@ -262,30 +261,28 @@ def validate_word_pair(shorter_word: str, longer_word: str, extra_letters: str) 
     extra_list = list(extra_letters)
     
     # Try to find a valid sequence of positions to remove
-    def can_remove_letters(word_list, letters_to_remove, current_idx=0, remove_count=0):
+    def can_remove_letters(positions_removed, current_idx=0, remove_count=0):
         """Recursively check if we can remove the specified letters to get the shorter word."""
-        if remove_count == len(letters_to_remove):
+        if remove_count == len(extra_list):
             # We've removed all required letters, check if result matches shorter_word
             result = ''.join([c for i, c in enumerate(longer_list) if i not in positions_removed])
             return result == shorter_word
         
-        if current_idx >= len(word_list):
+        if current_idx >= len(longer_list):
             return False
         
-        letter_to_remove = letters_to_remove[remove_count]
+        letter_to_remove = extra_list[remove_count]
         
         # Try removing at each valid position
-        for i in range(current_idx, len(word_list)):
-            if word_list[i] == letter_to_remove and i not in positions_removed:
-                positions_removed.add(i)
-                if can_remove_letters(word_list, letters_to_remove, i + 1, remove_count + 1):
+        for i in range(current_idx, len(longer_list)):
+            if longer_list[i] == letter_to_remove and i not in positions_removed:
+                new_positions = positions_removed | {i}
+                if can_remove_letters(new_positions, i + 1, remove_count + 1):
                     return True
-                positions_removed.remove(i)
         
         return False
     
-    positions_removed = set()
-    return can_remove_letters(longer_list, extra_list)
+    return can_remove_letters(set())
 
 
 async def generate_word_image(generator, word: str, style: Optional[str] = None) -> Optional[Image.Image]:
