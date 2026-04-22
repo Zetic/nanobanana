@@ -244,8 +244,6 @@ class GPTModelGenerator(BaseModelGenerator):
                 prompt=prompt,
                 quality="medium",
                 stream=True,
-                partial_images=3,
-                response_format="b64_json"  # Ensure we get base64 encoded responses
             )
             
             generated_image = None
@@ -290,7 +288,6 @@ class GPTModelGenerator(BaseModelGenerator):
                     model=self.model,
                     prompt=prompt,
                     quality="medium",
-                    response_format="b64_json"
                 )
                 if response.data and len(response.data) > 0:
                     image_base64 = response.data[0].b64_json
@@ -342,8 +339,6 @@ class GPTModelGenerator(BaseModelGenerator):
                         prompt=prompt,
                         quality="medium",
                         stream=True,
-                        partial_images=3,
-                        response_format="b64_json"  # Ensure we get base64 encoded responses
                     )
                 
                 partial_count = 0
@@ -395,7 +390,6 @@ class GPTModelGenerator(BaseModelGenerator):
                     image=img_file,  # Use file handle directly
                     prompt=prompt,
                     quality="medium",
-                    response_format="b64_json"  # Ensure we get base64 encoded responses
                 )
             
             if response.data and len(response.data) > 0:
