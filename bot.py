@@ -14,7 +14,6 @@ from image_utils import download_image
 from model_interface import get_model_generator
 from usage_tracker import usage_tracker
 from log_manager import log_manager
-from voice_handler import voice_manager
 from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image
 
 # Set up logging
@@ -36,7 +35,6 @@ if config.DEBUG_LOGGING:
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
-intents.voice_states = True  # Required for voice channel operations
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
 
 # Bot snitching feature - track messages that mention the bot
@@ -103,11 +101,10 @@ async def on_message(message):
     if not usage_tracker.is_elevated_user(message.author.id):
         has_limit, next_available = usage_tracker.has_reached_usage_limit(message.author.id)
         if has_limit:
-            # Check if this message involves the bot (mention or command)
-            bot_mentioned = is_directly_mentioned(message.content, bot.user.id)
+            # Only apply this auto-blocking behavior to prefix commands
             is_command = message.content.startswith(config.COMMAND_PREFIX)
             
-            if bot_mentioned or is_command:
+            if is_command:
                 # React with wilted_rose emoji (no message)
                 try:
                     await message.add_reaction("🥀")  # wilted_rose emoji
@@ -119,9 +116,10 @@ async def on_message(message):
     # Handle commands first
     await bot.process_commands(message)
     
-    # Check if bot is directly mentioned in the message content (not just in a reply)
-    if is_directly_mentioned(message.content, bot.user.id):
-        await handle_generation_request(message)
+    bot_mentioned = is_directly_mentioned(message.content, bot.user.id)
+    replied_to_bot = await is_reply_to_bot_message(message)
+    if bot_mentioned or replied_to_bot:
+        await handle_conversation_request(message)
 
 @bot.event
 async def on_message_delete(message):
@@ -176,6 +174,20 @@ def is_directly_mentioned(message_content, bot_user_id):
     nickname_mention = f'<@!{bot_user_id}>'
     
     return standard_mention in message_content or nickname_mention in message_content
+
+async def is_reply_to_bot_message(message) -> bool:
+    """Check whether this message is a reply to a bot-authored message."""
+    if not message.reference or not message.reference.message_id:
+        return False
+    
+    referenced = message.reference.cached_message
+    if referenced is None:
+        try:
+            referenced = await message.channel.fetch_message(message.reference.message_id)
+        except Exception:
+            return False
+    
+    return bool(referenced and referenced.author and referenced.author.id == bot.user.id)
 
 def is_dm_channel(channel) -> bool:
     """
@@ -314,182 +326,70 @@ async def extract_text_from_message(message):
     
     return content
 
-async def handle_generation_request(message):
-    """Handle image generation request when bot is mentioned."""
+async def handle_conversation_request(message):
+    """Handle text-only conversational responses for mentions/replies."""
     try:
-        # Send immediate response
-        response_message = await message.reply("Generating response...")
-        
-        # Extract text content and download images
+        response_message = await message.reply("Thinking...")
         text_content = await extract_text_from_message(message)
         
-        # Extract aspect ratio from text content
-        aspect_ratio, text_content = extract_aspect_ratio(text_content)
-        if aspect_ratio:
-            logger.info(f"Aspect ratio detected: {aspect_ratio}")
-        
-        images = []
-        
-        # Download attached images from the mentioning message
-        for attachment in message.attachments:
-            if attachment.content_type and attachment.content_type.startswith('image/'):
-                if attachment.size > config.MAX_IMAGE_SIZE:
-                    await response_message.edit(content=f"Image {attachment.filename} is too large. Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB.")
-                    return
-                
-                image = await download_image(attachment.url)
-                if image:
-                    images.append(image)
-                    logger.info(f"Downloaded image: {attachment.filename}")
-        
-        # If this is a reply message, download images from the original message (ignore text)
-        if message.reference and message.reference.message_id:
-            try:
-                # Fetch the original message being replied to
-                original_message = await message.channel.fetch_message(message.reference.message_id)
-                
-                # Download images from the original message (text is ignored as per issue requirements)
-                for attachment in original_message.attachments:
-                    if attachment.content_type and attachment.content_type.startswith('image/'):
-                        if attachment.size > config.MAX_IMAGE_SIZE:
-                            logger.warning(f"Skipping large image from original message: {attachment.filename}")
-                            continue
-                        
-                        image = await download_image(attachment.url)
-                        if image:
-                            images.append(image)
-                            logger.info(f"Downloaded image from original message: {attachment.filename}")
-                            
-            except Exception as e:
-                logger.error(f"Error fetching original message: {e}")
-                # Continue processing even if we can't fetch the original message
-        
-        # Process based on inputs
-        await process_generation_request(response_message, text_content, images, message.author, aspect_ratio)
-            
-    except Exception as e:
-        logger.error(f"Error handling generation request: {e}")
-        try:
-            # Try to edit the response message if it exists, otherwise reply to original
-            if 'response_message' in locals():
-                await response_message.edit(content="An error occurred while processing your request. Please try again.")
-            else:
-                await message.reply("An error occurred while processing your request. Please try again.")
-        except:
-            pass
-
-async def process_generation_request(response_message, text_content: str, images: List, user, aspect_ratio: Optional[str] = None):
-    """Process the generation request and edit the response message with the result."""
-    try:
-        # Always use the default Gemini model (nanobanana)
-        generator = get_model_generator("nanobanana")
-        
-        # Generate based on available inputs, rate limit status
-        generated_image = None
-        genai_text_response = None
-        usage_metadata = None
-        
-        # User can generate images
-        if images and text_content.strip():
-            # Text + Image(s) case
-            if len(images) == 1:
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                    text_content, images[0], None, aspect_ratio
-                )
-            else:
-                # For multiple images, pass first as primary and rest as additional
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text_and_image(
-                    text_content, images[0], None, aspect_ratio, images[1:]
-                )
-        elif images:
-            # Image(s) only case - no text provided
-            if len(images) == 1:
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                    images[0], None, aspect_ratio
-                )
-            else:
-                # For multiple images, pass first as primary and rest as additional
-                generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_image_only(
-                    images[0], None, aspect_ratio, images[1:]
-                )
-        elif text_content.strip():
-            # Text only case
-            generated_image, genai_text_response, usage_metadata = await generator.generate_image_from_text(
-                text_content, None, aspect_ratio
-            )
-        else:
-            # No content provided
-            await response_message.edit(content="Please provide some text or attach an image for me to work with!")
+        if not text_content.strip():
+            await response_message.edit(content="Please include some text in your message.")
             return
         
-        # Track usage if we have metadata and a user
-        if usage_metadata and user and not user.bot:  # Don't track bot usage
-            try:
-                prompt_tokens = usage_metadata.get("prompt_token_count", 0)
-                output_tokens = usage_metadata.get("candidates_token_count", 0)
-                total_tokens = usage_metadata.get("total_token_count", 0)
-                images_generated = 1 if generated_image else 0
-                
-                usage_tracker.record_usage(
-                    user_id=user.id,
-                    username=user.display_name or user.name,
-                    prompt_tokens=prompt_tokens,
-                    output_tokens=output_tokens,
-                    total_tokens=total_tokens,
-                    images_generated=images_generated
-                )
-                    
-            except Exception as e:
-                logger.warning(f"Could not track usage: {e}")
+        generator = get_model_generator("chat")
+        _, text_response, _ = await generator.generate_text_only_response(text_content)
         
-        # Send natural response based on what the API returned
-        responses = []
+        if not text_response or not text_response.strip():
+            await response_message.edit(content="I couldn't generate a response. Please try again.")
+            return
         
-        # Add text response if available
-        if genai_text_response and genai_text_response.strip():
-            responses.append(genai_text_response)
-        
-        # Add image if available
-        files = []
-        if generated_image:
-            # Save and send the image
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"generated_{timestamp}.png"
-            
-            # Save to disk
-            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-            generated_image.save(filepath)
-            
-            # Save to buffer for Discord
-            img_buffer = io.BytesIO()
-            generated_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-            files.append(discord.File(img_buffer, filename=filename))
-        
-        # Edit response message with the final result
-        if responses or files:
-            content = "\n".join(responses) if responses else None
-            
-            # Handle long messages by splitting them into chunks
-            if content:
-                message_chunks = split_long_message(content, max_length=1800)
-                
-                # Edit the original response with the first chunk (and any files)
-                first_chunk = message_chunks[0] if message_chunks else None
-                await response_message.edit(content=first_chunk, attachments=files)
-                
-                # Send any additional chunks as follow-up messages
-                for chunk in message_chunks[1:]:
-                    await response_message.channel.send(content=chunk)
-            else:
-                # Only files, no content
-                await response_message.edit(content=None, attachments=files)
-        else:
-            await response_message.edit(content="I wasn't able to generate anything from your request. Please try again with different input.")
-            
+        chunks = split_long_message(text_response, max_length=1800)
+        await response_message.edit(content=chunks[0])
+        for chunk in chunks[1:]:
+            await response_message.channel.send(content=chunk)
     except Exception as e:
-        logger.error(f"Error processing generation request: {e}")
-        await response_message.edit(content="An error occurred while generating. Please try again.")
+        logger.error(f"Error handling conversation request: {e}")
+        await message.reply("An error occurred while processing your request. Please try again.")
+
+
+async def generate_image_for_model(model_type: str, text_content: str, images: List, aspect_ratio: Optional[str] = None):
+    """Generate an image/text response for the requested model."""
+    generator = get_model_generator(model_type)
+    
+    if images and text_content.strip():
+        if len(images) == 1:
+            return await generator.generate_image_from_text_and_image(text_content, images[0], None, aspect_ratio)
+        return await generator.generate_image_from_text_and_image(text_content, images[0], None, aspect_ratio, images[1:])
+    if images:
+        if len(images) == 1:
+            return await generator.generate_image_from_image_only(images[0], None, aspect_ratio)
+        return await generator.generate_image_from_image_only(images[0], None, aspect_ratio, images[1:])
+    if text_content.strip():
+        return await generator.generate_image_from_text(text_content, None, aspect_ratio)
+    return None, None, None
+
+
+async def download_command_images(attachments: List[discord.Attachment], interaction: discord.Interaction) -> Optional[List]:
+    """Validate and download slash-command image attachments."""
+    images = []
+    for attachment in attachments:
+        if not attachment:
+            continue
+        if not attachment.content_type or not attachment.content_type.startswith('image/'):
+            await interaction.followup.send(f"❌ `{attachment.filename}` is not an image file.", ephemeral=True)
+            return None
+        if attachment.size > config.MAX_IMAGE_SIZE:
+            await interaction.followup.send(
+                f"❌ `{attachment.filename}` is too large. Maximum size is {config.MAX_IMAGE_SIZE // (1024*1024)}MB.",
+                ephemeral=True
+            )
+            return None
+        
+        image = await download_image(attachment.url)
+        if image:
+            images.append(image)
+    
+    return images
 
 
 
@@ -506,10 +406,6 @@ async def help_slash(interaction: discord.Interaction):
         logger.info(f"Blocked non-elevated user {interaction.user.id} from using /help in DM channel")
         return
     
-    # Check usage limit
-    if await check_usage_limit_and_respond(interaction):
-        return
-    
     # Use interaction.client.user for safety and provide fallbacks
     bot_user = interaction.client.user
     bot_name = bot_user.display_name if bot_user else "Nano Banana"
@@ -517,26 +413,11 @@ async def help_slash(interaction: discord.Interaction):
     
     help_text = f"""**{bot_name} - Help**
 
-I'm a bot that generates images and text using Google's AI!
+I'm a multi-model bot for conversational text and image generation.
 
 **How to use:**
-Just mention me ({bot_mention}) in a message with your prompt and optionally attach images!
-
-**Examples:**
-• `{bot_mention} Create a nano banana in space`
-• `{bot_mention} Make this cat magical` (with image attached)
-• `{bot_mention} Transform this into cyberpunk style` (with multiple images)
-• `{bot_mention} Create a landscape photo -16:9` (specify aspect ratio)
-• Reply to a message with images: `{bot_mention} make this change` (uses images and text from original message)
-
-**Features:**
-• Text-to-image generation
-• Image-to-image transformation  
-• Multiple image processing
-• Aspect ratio control (use `-16:9`, `-21:9`, `-4:3`, `-1:1`, `-9:16`, etc.)
-• Reply message support (uses images from original message, ignores text)
-• Natural text responses
-• Powered by Google Gemini AI
+• Mention me ({bot_mention}) or reply to one of my messages for a text-only response
+• Use slash commands for image generation
 
 **Supported Aspect Ratios:**
 • Landscape: `-21:9`, `-16:9`, `-4:3`, `-3:2`
@@ -546,23 +427,132 @@ Just mention me ({bot_mention}) in a message with your prompt and optionally att
 
 **Slash Commands:**
 • `/help` - Show this help message
+• `/gemini-image` - Generate/edit images with Gemini (prompt + optional image attachments)
+• `/gpt-image` - Generate/edit images with OpenAI gpt-image-2 (prompt + optional image attachments)
 • `/wordplay` - Play a word puzzle game! Guess the extra letter between two words (1 puzzle every 8 hours)
 • `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year). Optionally specify a user to transform their avatar instead.
-• `/connect` - Join your voice channel for speech-to-speech AI interaction (elevated users only)
-• `/disconnect` - Disconnect from voice channel (elevated users only)
 • `/usage` - Show token usage statistics (elevated users only)
 • `/log` - Get the most recent log file (elevated users only)
 • `/reset` - Reset cycle image usage for a user (elevated users only)
-• `/tier` - Assign a tier to a user (elevated users only)
-
-**Voice Features:**
-When connected to a voice channel, you can ask me to generate images by voice! Just say something like:
-• "Create an image of a sunset over mountains"
-• "Draw me a cute cartoon cat"
-• "Generate a futuristic city skyline"
-The generated images will be posted in the text channel where you used `/connect`."""
+• `/tier` - Assign a tier to a user (elevated users only)"""
     
     await interaction.response.send_message(help_text)
+
+
+async def run_image_command(
+    interaction: discord.Interaction,
+    model_type: str,
+    prompt: str,
+    image_1: Optional[discord.Attachment] = None,
+    image_2: Optional[discord.Attachment] = None,
+    image_3: Optional[discord.Attachment] = None,
+    image_4: Optional[discord.Attachment] = None
+):
+    """Shared implementation for image slash commands."""
+    if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
+        await interaction.response.send_message(
+            "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
+            ephemeral=True
+        )
+        return
+    
+    if await check_usage_limit_and_respond(interaction):
+        return
+    
+    await interaction.response.defer()
+    
+    attachments = [image_1, image_2, image_3, image_4]
+    images = await download_command_images(attachments, interaction)
+    if images is None:
+        return
+    
+    aspect_ratio, cleaned_prompt = extract_aspect_ratio(prompt)
+    generated_image, text_response, usage_metadata = await generate_image_for_model(model_type, cleaned_prompt, images, aspect_ratio)
+    
+    if usage_metadata and not interaction.user.bot:
+        prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+        output_tokens = usage_metadata.get("candidates_token_count", 0)
+        total_tokens = usage_metadata.get("total_token_count", 0)
+        images_generated = 1 if generated_image else 0
+        usage_tracker.record_usage(
+            user_id=interaction.user.id,
+            username=interaction.user.display_name or interaction.user.name,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            images_generated=images_generated
+        )
+    
+    responses = []
+    if text_response and text_response.strip():
+        responses.append(text_response)
+    
+    file = None
+    if generated_image:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{model_type}_{timestamp}.png"
+        filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+        generated_image.save(filepath)
+        img_buffer = io.BytesIO()
+        generated_image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        file = discord.File(img_buffer, filename=filename)
+    
+    if not responses and not file:
+        await interaction.followup.send("I wasn't able to generate anything from your request. Please try again.")
+        return
+    
+    content = "\n".join(responses) if responses else None
+    chunks = split_long_message(content, max_length=1800) if content else []
+    first_chunk = chunks[0] if chunks else None
+    
+    if file:
+        await interaction.followup.send(content=first_chunk, file=file)
+    else:
+        await interaction.followup.send(content=first_chunk)
+    
+    for chunk in chunks[1:]:
+        await interaction.followup.send(content=chunk)
+
+
+@bot.tree.command(name='gemini-image', description='Generate or edit images with Gemini')
+@app_commands.describe(
+    prompt='Prompt for image generation/editing (supports -16:9 style aspect ratio flags)',
+    image_1='Optional first image attachment',
+    image_2='Optional second image attachment',
+    image_3='Optional third image attachment',
+    image_4='Optional fourth image attachment'
+)
+async def gemini_image_slash(
+    interaction: discord.Interaction,
+    prompt: str,
+    image_1: Optional[discord.Attachment] = None,
+    image_2: Optional[discord.Attachment] = None,
+    image_3: Optional[discord.Attachment] = None,
+    image_4: Optional[discord.Attachment] = None
+):
+    """Generate/edit images with Gemini."""
+    await run_image_command(interaction, "nanobanana", prompt, image_1, image_2, image_3, image_4)
+
+
+@bot.tree.command(name='gpt-image', description='Generate or edit images with OpenAI gpt-image-2')
+@app_commands.describe(
+    prompt='Prompt for image generation/editing (supports -16:9 style aspect ratio flags)',
+    image_1='Optional first image attachment',
+    image_2='Optional second image attachment',
+    image_3='Optional third image attachment',
+    image_4='Optional fourth image attachment'
+)
+async def gpt_image_slash(
+    interaction: discord.Interaction,
+    prompt: str,
+    image_1: Optional[discord.Attachment] = None,
+    image_2: Optional[discord.Attachment] = None,
+    image_3: Optional[discord.Attachment] = None,
+    image_4: Optional[discord.Attachment] = None
+):
+    """Generate/edit images with OpenAI gpt-image-2."""
+    await run_image_command(interaction, "gpt", prompt, image_1, image_2, image_3, image_4)
 
 @bot.tree.command(name='usage', description='Show token usage statistics (elevated users only)')
 async def usage_slash(interaction: discord.Interaction):
@@ -959,113 +949,6 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
 
 
 
-@bot.tree.command(name='connect', description='Join your voice channel for speech-to-speech AI interaction (elevated users only)')
-async def connect_slash(interaction: discord.Interaction):
-    """Connect to user's voice channel and start voice AI session (elevated users only)."""
-    try:
-        # Check if interaction is from a guild (voice only works in servers)
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server, not in DMs.",
-                ephemeral=True
-            )
-            return
-        
-        # Check if the command caller has elevated status
-        if not usage_tracker.is_elevated_user(interaction.user.id):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command. Only elevated users can use voice features.",
-                ephemeral=True
-            )
-            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /connect")
-            return
-        
-        # Check if XAI API key is configured
-        if not config.XAI_API_KEY:
-            await interaction.response.send_message(
-                "❌ Voice bot feature is not configured. Please contact the administrator.",
-                ephemeral=True
-            )
-            logger.warning("Voice connect attempted but XAI_API_KEY not configured")
-            return
-        
-        # Check if user is in a voice channel
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "❌ You need to be in a voice channel to use this command.",
-                ephemeral=True
-            )
-            return
-        
-        voice_channel = interaction.user.voice.channel
-        
-        # Check if bot is already connected to a voice channel in this guild
-        if voice_manager.has_active_session(interaction.guild.id):
-            await interaction.response.send_message(
-                "❌ I'm already connected to a voice channel in this server. Use `/disconnect` first.",
-                ephemeral=True
-            )
-            return
-        
-        # Check if bot has permission to connect and speak
-        permissions = voice_channel.permissions_for(interaction.guild.me)
-        if not permissions.connect:
-            await interaction.response.send_message(
-                "❌ I don't have permission to connect to that voice channel.",
-                ephemeral=True
-            )
-            return
-        if not permissions.speak:
-            await interaction.response.send_message(
-                "❌ I don't have permission to speak in that voice channel.",
-                ephemeral=True
-            )
-            return
-        
-        # Defer the response since connecting may take a moment
-        await interaction.response.defer()
-        
-        # Connect to voice channel and start session
-        # Pass the text channel so images can be posted there
-        session, error_reason = await voice_manager.connect(voice_channel, interaction.channel)
-        
-        if session:
-            await interaction.followup.send(
-                f"🎙️ Connected to **{voice_channel.name}**!\n\n"
-                f"I'm now listening and ready to chat. Speak naturally and I'll respond.\n"
-                f"You can ask me to generate images and I'll post them here.\n"
-                f"Use `/disconnect` when you're done."
-            )
-            logger.info(f"User {interaction.user.id} started voice session in channel {voice_channel.id}")
-        else:
-            # Log detailed error and provide user feedback
-            logger.error(f"Voice connection failed for user {interaction.user.id} in channel {voice_channel.id}: {error_reason}")
-            
-            # Create user-friendly error message with debug info
-            user_message = "❌ Failed to connect to the voice channel."
-            if error_reason:
-                user_message += f"\n\n**Reason:** {error_reason}"
-            user_message += "\n\nPlease try again later or contact an administrator if the issue persists."
-            
-            await interaction.followup.send(user_message, ephemeral=True)
-            
-    except Exception as e:
-        logger.error(f"Error in connect command: {e}")
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(
-                    "An error occurred while connecting to voice channel. Please try again.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "An error occurred while connecting to voice channel. Please try again.",
-                    ephemeral=True
-                )
-        except:
-            pass
-
-
 # Modal for wordplay answer submission
 class WordplayAnswerModal(discord.ui.Modal, title="Submit Your Answer"):
     """Modal for submitting a wordplay puzzle answer."""
@@ -1439,61 +1322,6 @@ async def wordplay_slash(
             logger.error(f"Could not send error message: {discord_error}")
 
 
-@bot.tree.command(name='disconnect', description='Disconnect from voice channel (elevated users only)')
-async def disconnect_slash(interaction: discord.Interaction):
-    """Disconnect from voice channel and end voice AI session (elevated users only)."""
-    try:
-        # Check if interaction is from a guild
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server, not in DMs.",
-                ephemeral=True
-            )
-            return
-        
-        # Check if the command caller has elevated status
-        if not usage_tracker.is_elevated_user(interaction.user.id):
-            await interaction.response.send_message(
-                "❌ You don't have permission to use this command. Only elevated users can use voice features.",
-                ephemeral=True
-            )
-            logger.info(f"Blocked non-elevated user {interaction.user.id} from using /disconnect")
-            return
-        
-        # Check if bot is connected to a voice channel in this guild
-        if not voice_manager.has_active_session(interaction.guild.id):
-            await interaction.response.send_message(
-                "❌ I'm not currently connected to a voice channel in this server.",
-                ephemeral=True
-            )
-            return
-        
-        # Get the current session to get channel info before disconnecting
-        session = voice_manager.get_session(interaction.guild.id)
-        channel_name = session.channel.name if session else "voice channel"
-        
-        # Disconnect
-        success = await voice_manager.disconnect(interaction.guild.id)
-        
-        if success:
-            await interaction.response.send_message(
-                f"👋 Disconnected from **{channel_name}**. Thanks for chatting!"
-            )
-            logger.info(f"User {interaction.user.id} ended voice session in guild {interaction.guild.id}")
-        else:
-            await interaction.response.send_message(
-                "❌ Failed to disconnect. Please try again.",
-                ephemeral=True
-            )
-            
-    except Exception as e:
-        logger.error(f"Error in disconnect command: {e}")
-        await interaction.response.send_message(
-            "An error occurred while disconnecting. Please try again.",
-            ephemeral=True
-        )
-
-
 def main():
     """Main function to run the bot."""
     if not config.DISCORD_TOKEN:
@@ -1502,6 +1330,10 @@ def main():
     
     if not config.GOOGLE_API_KEY:
         logger.error("GOOGLE_API_KEY not found in environment variables")
+        return
+    
+    if not config.OPENAI_API_KEY:
+        logger.error("OPENAI_API_KEY not found in environment variables")
         return
     
     logger.info("Starting Discord Bot...")

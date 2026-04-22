@@ -12,9 +12,9 @@ GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 
 # OpenAI configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-OPENAI_REALTIME_MODEL = os.getenv('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview-2024-12-17')
 
-# XAI configuration
+# Legacy voice configuration (voice commands are disabled in bot.py)
+OPENAI_REALTIME_MODEL = os.getenv('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview-2024-12-17')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 XAI_VOICE_MODEL = os.getenv('XAI_VOICE_MODEL', 'grok-2-voice-1212')
 XAI_VOICE = os.getenv('XAI_VOICE', 'ara')
@@ -44,8 +44,7 @@ if _elevated_users_str.strip():
 LOGS_DIR = 'logs'
 
 # Debug logging configuration
-# Set DEBUG_LOGGING=true in environment to enable detailed voice pipeline logging
-# This provides timing information and event tracking for diagnosing slow response times
+# Set DEBUG_LOGGING=true in environment to enable detailed debug logging
 DEBUG_LOGGING = os.getenv('DEBUG_LOGGING', 'false').lower() in ('true', '1', 'yes')
 
 # Ensure directories exist

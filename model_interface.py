@@ -226,14 +226,14 @@ class GeminiModelGenerator(BaseModelGenerator):
 
 
 class GPTModelGenerator(BaseModelGenerator):
-    """Handles OpenAI image generation using the gpt-image-1 model."""
+    """Handles OpenAI image generation using the gpt-image-2 model."""
     
     def __init__(self):
         if not config.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
         
         self.client = OpenAI(api_key=config.OPENAI_API_KEY)
-        self.model = "gpt-image-1"
+        self.model = "gpt-image-2"
     
     async def _generate_image_only(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image from text prompt using OpenAI Image API with streaming."""
@@ -310,7 +310,7 @@ class GPTModelGenerator(BaseModelGenerator):
             return generated_image, text_response, usage_metadata
             
         except Exception as e:
-            logger.error(f"Error generating image with gpt-image-1: {e}")
+            logger.error(f"Error generating image with gpt-image-2: {e}")
             return None, None, None
     
     async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image], streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
@@ -471,46 +471,43 @@ class GPTModelGenerator(BaseModelGenerator):
 
 
 class ChatModelGenerator(BaseModelGenerator):
-    """Handles text-only chat responses using Gemini."""
+    """Handles text-only chat responses using OpenAI GPT-5.4 mini."""
     
     def __init__(self):
-        if not config.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY not found in environment variables")
+        if not config.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY not found in environment variables")
         
-        self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
-        self.text_only_model = "gemini-2.5-flash"
+        self.client = OpenAI(api_key=config.OPENAI_API_KEY)
+        self.text_only_model = "gpt-5.4-mini"
     
     def _extract_text_from_response(self, response) -> Optional[str]:
-        """Extract text from GenAI response."""
+        """Extract text from OpenAI chat response."""
         try:
-            if hasattr(response, 'candidates') and response.candidates:
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and candidate.content:
-                        for part in candidate.content.parts:
-                            if hasattr(part, 'text') and part.text:
-                                return part.text.strip()
+            if not response or not getattr(response, "choices", None):
+                return None
+            message = response.choices[0].message
+            if message and message.content:
+                return message.content.strip()
             return None
         except Exception as e:
             logger.error(f"Error extracting text from response: {e}")
             return None
     
     def _extract_usage_from_response(self, response) -> Optional[Dict[str, Any]]:
-        """Extract usage metadata from GenAI response."""
+        """Extract usage metadata from OpenAI chat response."""
         try:
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                usage_metadata = response.usage_metadata
+            if hasattr(response, 'usage') and response.usage:
+                usage_metadata = response.usage
                 return {
-                    "prompt_token_count": getattr(usage_metadata, 'prompt_token_count', 0) or 0,
-                    "candidates_token_count": getattr(usage_metadata, 'candidates_token_count', 0) or 0,
-                    "total_token_count": getattr(usage_metadata, 'total_token_count', 0) or 0,
-                    "cached_content_token_count": getattr(usage_metadata, 'cached_content_token_count', 0) or 0,
+                    "prompt_token_count": getattr(usage_metadata, 'prompt_tokens', 0) or 0,
+                    "candidates_token_count": getattr(usage_metadata, 'completion_tokens', 0) or 0,
+                    "total_token_count": getattr(usage_metadata, 'total_tokens', 0) or 0,
                 }
             else:
                 return {
                     "prompt_token_count": 0,
                     "candidates_token_count": 0,
                     "total_token_count": 0,
-                    "cached_content_token_count": 0,
                 }
         except Exception as e:
             logger.error(f"Error extracting usage metadata: {e}")
@@ -518,32 +515,23 @@ class ChatModelGenerator(BaseModelGenerator):
                 "prompt_token_count": 0,
                 "candidates_token_count": 0,
                 "total_token_count": 0,
-                "cached_content_token_count": 0,
             }
     
     async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
-        """Generate text response using Gemini."""
+        """Generate text response using OpenAI GPT-5.4 mini."""
         try:
-            # For text-only model, we need to process images differently
-            if input_images:
-                # Convert images to Parts for the text-only model to analyze
-                contents = [prompt]
-                for image in input_images:
-                    img_buffer = io.BytesIO()
-                    image.save(img_buffer, format='PNG')
-                    img_bytes = img_buffer.getvalue()
-                    
-                    image_part = types.Part.from_bytes(
-                        data=img_bytes,
-                        mime_type='image/png'
-                    )
-                    contents.append(image_part)
-            else:
-                contents = [prompt]
-            
-            response = self.client.models.generate_content(
+            response = self.client.chat.completions.create(
                 model=self.text_only_model,
-                contents=contents,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful Discord assistant. Reply in plain text only."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
             )
             
             text = self._extract_text_from_response(response)

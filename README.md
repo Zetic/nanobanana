@@ -1,19 +1,15 @@
 # 🍌 Nano Banana Discord Bot
 
-A Discord bot that generates images and text using Google's Gemini AI and OpenAI. The bot returns natural responses from the AI - text when the AI responds with text, images when it responds with images, or both when it responds with both.
+A multi-model Discord bot with text chat via OpenAI GPT-5.4 mini and image generation via Gemini and OpenAI gpt-image-2.
 
 ## ✨ Features
 
-- **Text-to-Image Generation**: Create images from descriptive text prompts
-- **Image-to-Image Transformation**: Transform uploaded images using AI  
-- **Multi-Image Processing**: Process multiple images simultaneously
+- **Conversational Mentions/Replies**: Mention the bot or reply to the bot for text-only GPT-5.4 mini responses
+- **Gemini Image Command**: `/gemini-image` supports prompt-only and prompt+image workflows
+- **OpenAI Image Command**: `/gpt-image` supports prompt-only and prompt+image workflows using `gpt-image-2` (`quality="medium"`)
+- **Multi-Image Processing**: Process multiple images in image commands
 - **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
-- **Meme Generation**: Generate nonsensical memes using OpenAI
-- **Voice Bot**: Full-duplex speech-to-speech interaction using XAI's Grok Voice API
-- **Reply Message Support**: Automatically uses images from the original message when mentioned in a reply (text from original message is ignored)
 - **Bot Snitching**: Catches users who delete messages that mentioned the bot (within 8 hours) and playfully calls them out
-- **Natural API Responses**: Returns whatever the AI naturally generates (text, images, or both)
-- **Discord Integration**: Simple mention-based interaction
 - **Smart Processing**: Automatic image resizing and optimization
 - **Usage Tracking**: Track token usage per user with detailed statistics
 
@@ -24,9 +20,7 @@ A Discord bot that generates images and text using Google's Gemini AI and OpenAI
 - Python 3.8+
 - Discord Bot Token
 - Google GenAI API Key
-- OpenAI API Key (for meme generation)
-- XAI API Key (for voice bot)
-- FFmpeg (required for voice bot feature)
+- OpenAI API Key
 
 ### Installation
 
@@ -47,7 +41,7 @@ cp .env.example .env
 # Edit .env with your tokens:
 # DISCORD_TOKEN=your_discord_bot_token_here
 # GOOGLE_API_KEY=your_google_api_key_here
-# XAI_API_KEY=your_xai_api_key_here
+# OPENAI_API_KEY=your_openai_api_key_here
 ```
 
 4. Run the bot:
@@ -72,26 +66,9 @@ python main.py
   @Nano Banana Create a nano banana floating in space
   ```
 
-- **Attach images** with your mention to transform them:
+- **Reply to the bot** for text chat:
   ```
-  @Nano Banana Make this cat look cyberpunk (with image attached)
-  ```
-
-- **Multiple images** can be processed simultaneously:
-  ```
-  @Nano Banana Combine these into a fantasy scene (with multiple images)
-  ```
-
-- **Reply to messages with images** to use images from the original message:
-  ```
-  @Nano Banana make this change (as a reply to a message with images)
-  ```
-
-- **Specify aspect ratios** for image generation:
-  ```
-  @Nano Banana Create a cinematic landscape -21:9
-  @Nano Banana Make this portrait -9:16
-  @Nano Banana Generate a square image -1:1
+  (reply to bot message) Tell me 3 options for this idea
   ```
 
 **Supported Aspect Ratios:**
@@ -100,12 +77,7 @@ python main.py
 - **Portrait**: `-9:16`, `-3:4`, `-2:3`
 - **Flexible**: `-5:4`, `-4:5`
 
-The bot will respond naturally based on what the AI generates:
-- **Text responses** when the AI provides text
-- **Image responses** when the AI generates images  
-- **Both text and images** when the AI provides both
-
-When you mention the bot in a reply to another message, it will automatically include any images from the original message in addition to any images you attach to your reply. Text from the original message is ignored.
+Mentions/replies are text-only chat. Use slash image commands for image generation/editing.
 
 ### Available Commands
 
@@ -114,77 +86,15 @@ When you mention the bot in a reply to another message, it will automatically in
 
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
+- `/gemini-image` - Generate/edit images with Gemini (prompt + optional images)
+- `/gpt-image` - Generate/edit images with OpenAI gpt-image-2 (prompt + optional images)
 - `/avatar` - Transform your avatar with themed templates
-- `/connect` - Join your voice channel for speech-to-speech AI interaction
-- `/disconnect` - Disconnect from voice channel
 - `/usage` - Show token usage statistics (elevated users only)
 - `/log` - Get the most recent log file (elevated users only)
 - `/reset` - Reset cycle image usage for a user (elevated users only)
 - `/tier` - Assign a tier to a user (elevated users only)
-- `/meme` - Generate a nonsensical meme using OpenAI
 
 **Note:** Elevated users are configured via the `ELEVATED_USERS` environment variable (comma-separated Discord user IDs).
-
-### Voice Bot (Speech-to-Speech)
-
-The bot supports full-duplex speech interaction using XAI's Grok Voice API:
-
-**How to use:**
-1. Join a voice channel in your Discord server
-2. Use `/connect` to have the bot join your voice channel
-3. Speak naturally - the bot will listen and respond in real-time
-4. Use `/disconnect` when you're done
-
-**System Requirements:**
-- **FFmpeg**: Required for audio processing
-  ```bash
-  # Ubuntu/Debian
-  sudo apt-get update && sudo apt-get install -y ffmpeg
-  
-  # macOS
-  brew install ffmpeg
-  
-  # Windows
-  # Download from https://ffmpeg.org/download.html
-  ```
-- **Opus Library**: Required for Discord voice support
-  ```bash
-  # Ubuntu/Debian
-  sudo apt-get install -y libopus0
-  
-  # macOS (usually bundled with discord.py)
-  brew install opus
-  ```
-
-**Python Requirements:**
-- XAI API key with access to the Grok Voice API
-- `discord-ext-voice-recv` extension (included in requirements.txt) for voice input
-
-**Discord Permissions:**
-- Bot needs "Connect" and "Speak" permissions in the voice channel
-
-**Features:**
-- Full-duplex voice interaction (listen and speak simultaneously)
-- Real-time XAI Grok Voice API integration
-- Audio response playback into voice channel
-- Server-side voice activity detection (VAD)
-- Automatic audio format conversion (Discord 48kHz stereo ↔ XAI 16kHz mono)
-- Proper session management and cleanup
-
-**Voice Options:**
-You can configure the voice used by the bot in your `.env` file:
-- `ara` (default)
-- `ash`
-- `ballad`
-- `coral`
-- `sage`
-- `verse`
-
-**Docker Deployment:**
-If running in Docker, add these to your Dockerfile:
-```dockerfile
-RUN apt-get update && apt-get install -y ffmpeg libopus0
-```
 
 ### Usage Tracking & Tier System
 
@@ -267,10 +177,7 @@ All bot activities, errors, and user interactions are logged for monitoring and 
 |----------|-------------|----------|
 | `DISCORD_TOKEN` | Your Discord bot token | Yes |
 | `GOOGLE_API_KEY` | Your Google GenAI API key | Yes |
-| `OPENAI_API_KEY` | Your OpenAI API key (for meme generation) | Yes |
-| `XAI_API_KEY` | Your XAI API key (for voice bot) | Yes |
-| `XAI_VOICE_MODEL` | XAI voice model (default: `grok-2-voice-1212`) | No |
-| `XAI_VOICE` | XAI voice to use: ara, ash, ballad, coral, sage, verse (default: `ara`) | No |
+| `OPENAI_API_KEY` | Your OpenAI API key (for GPT chat + gpt-image command) | Yes |
 | `ELEVATED_USERS` | Comma-separated Discord user IDs with elevated permissions | No |
 
 ### Bot Configuration
@@ -290,7 +197,7 @@ nanobanana/
 ├── bot.py              # Main Discord bot implementation
 ├── config.py           # Configuration management
 ├── model_interface.py  # Unified AI model interface (Gemini, GPT, Chat)
-├── voice_handler.py    # Voice bot and XAI Grok Voice API integration
+├── voice_handler.py    # Legacy voice integration module (commands removed)
 ├── image_utils.py      # Image processing utilities
 ├── usage_tracker.py    # User usage tracking system
 ├── log_manager.py      # Logging system management
@@ -304,47 +211,29 @@ nanobanana/
 
 The bot uses multiple AI providers:
 
-**Google Gemini (primary generation):**
-- **Text-to-Image**: Creates images from text descriptions
-- **Image-to-Image**: Transforms existing images based on prompts
+**Google Gemini:**
+- **Image Generation**: Used by `/gemini-image`, `/avatar`, and `/wordplay`
 
-**OpenAI (meme generation):**
-- **Meme Creation**: Generates nonsensical memes using DALL-E 3
-
-**XAI (voice bot):**
-- **Voice Bot**: Full-duplex speech interaction using Grok Voice API
+**OpenAI:**
+- **Conversational Chat**: Mentions/replies use GPT-5.4 mini
+- **Image Generation**: `/gpt-image` uses `gpt-image-2`
 
 ## 📝 Examples
 
-### Text Generation
+### Text Conversation
 ```
-@Nano Banana Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme
-```
-
-### Image Transformation
-```
-@Nano Banana Transform this into a magical fairy tale scene
-```
-*(with image attached)*
-
-### Multi-Image Processing
-```
-@Nano Banana Combine these characters in an epic battle scene
-```
-*(with multiple images attached)*
-
-### Aspect Ratio Control
-```
-@Nano Banana Create a cinematic scene of a nano banana -21:9
-@Nano Banana Make this portrait style -9:16
-@Nano Banana Generate a square avatar -1:1
+@Nano Banana Give me 3 fun ideas for a banana mascot
 ```
 
-### Meme Generation
+### Gemini Image Generation
 ```
-/meme
+/gemini-image prompt: Transform this into a magical fairy tale scene image_1: [upload image]
 ```
-*Generates a nonsensical meme using OpenAI*
+
+### OpenAI Image Generation
+```
+/gpt-image prompt: Design a futuristic city skyline -21:9
+```
 
 ## 🤝 Contributing
 
