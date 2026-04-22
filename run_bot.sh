@@ -116,6 +116,7 @@ check_environment() {
             print_warning "Please edit .env file with your actual tokens:"
             print_info "  - DISCORD_TOKEN: Your Discord bot token"
             print_info "  - GOOGLE_API_KEY: Your Google GenAI API key"
+            print_info "  - OPENAI_API_KEY: Your OpenAI API key"
             print_info ""
             print_info "After editing .env, run this script again"
             exit 1
@@ -124,16 +125,18 @@ check_environment() {
             print_info "Please create a .env file with:"
             print_info "  DISCORD_TOKEN=your_discord_bot_token_here"
             print_info "  GOOGLE_API_KEY=your_google_api_key_here"
+            print_info "  OPENAI_API_KEY=your_openai_api_key_here"
             exit 1
         fi
     fi
     
     # Check if tokens are set (not just placeholder values)
-    if grep -q "your_discord_bot_token_here" .env || grep -q "your_google_api_key_here" .env; then
+    if grep -q "your_discord_bot_token_here" .env || grep -q "your_google_api_key_here" .env || grep -q "your_openai_api_key_here" .env; then
         print_warning "Default placeholder values found in .env"
         print_info "Please edit .env file with your actual tokens:"
         print_info "  - DISCORD_TOKEN: Your Discord bot token"
         print_info "  - GOOGLE_API_KEY: Your Google GenAI API key"
+        print_info "  - OPENAI_API_KEY: Your OpenAI API key"
         exit 1
     fi
     
