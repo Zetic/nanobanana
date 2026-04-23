@@ -17,19 +17,20 @@ def _png_b64() -> str:
 
 
 class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    async def _mock_to_thread_call(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
     async def test_generate_stream_call_omits_unsupported_params(self):
         mock_images = Mock()
         mock_images.generate.return_value = SimpleNamespace(
             data=[SimpleNamespace(b64_json=_png_b64())]
         )
         mock_client = SimpleNamespace(images=mock_images)
-        
-        async def call_in_place(func, *args, **kwargs):
-            return func(*args, **kwargs)
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), patch.object(
             model_interface, "OpenAI", return_value=mock_client
-        ), patch.object(model_interface.asyncio, "to_thread", new=AsyncMock(side_effect=call_in_place)) as mock_to_thread:
+        ), patch.object(model_interface.asyncio, "to_thread", new=AsyncMock(side_effect=self._mock_to_thread_call)) as mock_to_thread:
             generator = model_interface.GPTModelGenerator()
             image, text, usage = await generator._generate_image_only("banana")
 
@@ -53,13 +54,10 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         )
         mock_client = SimpleNamespace(images=mock_images)
         input_image = Image.new("RGB", (2, 2), color="blue")
-        
-        async def call_in_place(func, *args, **kwargs):
-            return func(*args, **kwargs)
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), patch.object(
             model_interface, "OpenAI", return_value=mock_client
-        ), patch.object(model_interface.asyncio, "to_thread", new=AsyncMock(side_effect=call_in_place)) as mock_to_thread:
+        ), patch.object(model_interface.asyncio, "to_thread", new=AsyncMock(side_effect=self._mock_to_thread_call)) as mock_to_thread:
             generator = model_interface.GPTModelGenerator()
             image, text, usage = await generator._generate_image_with_input_images(
                 "edit banana", [input_image]
@@ -76,6 +74,10 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["quality"], "medium")
         self.assertNotIn("stream", kwargs)
         self.assertIsInstance(kwargs["image"], bytes)
+        self.assertGreater(len(kwargs["image"]), 0)
+        self.assertTrue(kwargs["image"].startswith(b"\x89PNG"))
+        sent_image = Image.open(io.BytesIO(kwargs["image"]))
+        self.assertEqual(sent_image.size, (2, 2))
         self.assertNotIn("response_format", kwargs)
         self.assertNotIn("partial_images", kwargs)
 

@@ -294,15 +294,24 @@ class GPTModelGenerator(BaseModelGenerator):
             if streaming_callback:
                 await streaming_callback("Editing image...")
 
-            with open(temp_filename, 'rb') as img_file:
-                image_data = img_file.read()
-            
+            def _edit_image_request():
+                try:
+                    with open(temp_filename, 'rb') as img_file:
+                        image_data = img_file.read()
+                except Exception as file_error:
+                    raise RuntimeError(
+                        f"Failed to read image file for editing: {temp_filename}"
+                    ) from file_error
+                
+                return self.client.images.edit(
+                    model=self.model,
+                    image=image_data,
+                    prompt=prompt,
+                    quality="medium",
+                )
+
             response = await asyncio.to_thread(
-                self.client.images.edit,
-                model=self.model,
-                image=image_data,
-                prompt=prompt,
-                quality="medium",
+                _edit_image_request
             )
             
             if response.data and len(response.data) > 0:
