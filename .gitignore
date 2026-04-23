@@ -43,6 +43,7 @@ input_images/
 
 # Logs
 *.log
+logs/
 
 # Test files
 test_prompt_modal.py

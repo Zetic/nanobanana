@@ -162,12 +162,13 @@ This feature encourages users to own their creative (or silly) prompts! 😄
 
 ### Logging
 
-The bot maintains daily log files in the `logs/` directory:
-- **Daily rotation**: New log file created each day (format: `bot-YYYY-MM-DD.log`)
-- **Persistent logging**: Bot continues writing to the same day's log file if restarted
-- **Log retrieval**: Elevated users can download the most recent log file using `/log`
+The bot writes logs to `logs/bot.log` with automatic size-based rotation:
+- **Rotating files**: Log rotates at 5 MB; up to 3 backups are kept (`bot.log`, `bot.log.1`, `bot.log.2`, `bot.log.3`)
+- **Startup banner**: A timestamped separator is written each time the bot starts, making restarts easy to spot
+- **Clean format**: `YYYY-MM-DD HH:MM:SS | LEVEL    | module: message`
+- **Log retrieval**: Elevated users can download the current log file using `/log`
 
-All bot activities, errors, and user interactions are logged for monitoring and debugging purposes.
+Only bot application events (INFO and above) are recorded; verbose output from third-party libraries is suppressed to WARNING level to keep log files small.
 
 ## 🛠️ Configuration
 

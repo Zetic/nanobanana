@@ -13,19 +13,12 @@ import config
 from image_utils import download_image
 from model_interface import get_model_generator
 from usage_tracker import usage_tracker
-from log_manager import log_manager
+from log_manager import log_manager  # importing this module configures logging
 from wordplay_game import session_manager, generate_word_pair_with_gemini, generate_word_image
 
-# Set up logging
-# Use DEBUG level if DEBUG_LOGGING is enabled in config, otherwise INFO
-log_level = logging.DEBUG if config.DEBUG_LOGGING else logging.INFO
-logging.basicConfig(
-    level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
-# Enable debug logging in log_manager if configured
+# Honour the DEBUG_LOGGING env-var flag
 if config.DEBUG_LOGGING:
     log_manager.set_debug_logging(True)
     logger.info("Debug logging enabled via DEBUG_LOGGING environment variable")
