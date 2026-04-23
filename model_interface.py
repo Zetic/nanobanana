@@ -6,6 +6,7 @@ This provides a unified interface for different AI model providers.
 import io
 import logging
 import base64
+import asyncio
 from abc import ABC, abstractmethod
 from PIL import Image
 from google import genai
@@ -236,63 +237,23 @@ class GPTModelGenerator(BaseModelGenerator):
         self.model = "gpt-image-2"
     
     async def _generate_image_only(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate image from text prompt using OpenAI Image API with streaming."""
+        """Generate image from text prompt using OpenAI Image API."""
         try:
-            # Use streaming generation with partial images
-            stream = self.client.images.generate(
+            if streaming_callback:
+                await streaming_callback("Generating image...")
+            
+            response = await asyncio.to_thread(
+                self.client.images.generate,
                 model=self.model,
                 prompt=prompt,
                 quality="medium",
-                stream=True,
             )
             
             generated_image = None
-            partial_count = 0
-            
-            for event in stream:
-                if event.type == "image_generation.partial_image":
-                    partial_count += 1
-                    # Log partial image received (could save them if needed)
-                    logger.info(f"Received partial image {event.partial_image_index + 1}/3")
-                    
-                    # Update Discord message with partial image if callback provided
-                    if streaming_callback:
-                        try:
-                            # Convert partial image to PIL Image and send to callback
-                            if hasattr(event, 'b64_json') and event.b64_json:
-                                image_bytes = base64.b64decode(event.b64_json)
-                                partial_image = Image.open(io.BytesIO(image_bytes))
-                                # Call callback with partial image instead of just text
-                                await streaming_callback(f"Generating image... ({partial_count}/3)", partial_image)
-                            else:
-                                # Fallback to text if no image data
-                                await streaming_callback(f"Generating image... ({partial_count}/3)")
-                        except Exception as callback_error:
-                            logger.warning(f"Streaming callback failed: {callback_error}")
-                    
-                    # Could save partial images for debugging:
-                    # image_base64 = event.b64_json
-                    # image_bytes = base64.b64decode(image_base64)
-                    # with open(f"partial_{event.partial_image_index}.png", "wb") as f:
-                    #     f.write(image_bytes)
-                elif event.type == "image_generation.done":
-                    # Final image
-                    image_base64 = event.b64_json
-                    image_bytes = base64.b64decode(image_base64)
-                    generated_image = Image.open(io.BytesIO(image_bytes))
-            
-            # If streaming didn't work, fall back to non-streaming
-            if generated_image is None:
-                logger.info("Streaming failed, falling back to non-streaming generation")
-                response = self.client.images.generate(
-                    model=self.model,
-                    prompt=prompt,
-                    quality="medium",
-                )
-                if response.data and len(response.data) > 0:
-                    image_base64 = response.data[0].b64_json
-                    image_bytes = base64.b64decode(image_base64)
-                    generated_image = Image.open(io.BytesIO(image_bytes))
+            if response.data and len(response.data) > 0:
+                image_base64 = response.data[0].b64_json
+                image_bytes = base64.b64decode(image_base64)
+                generated_image = Image.open(io.BytesIO(image_bytes))
             
             # Return just the prompt as text response (as requested in issue)
             text_response = prompt
@@ -311,7 +272,7 @@ class GPTModelGenerator(BaseModelGenerator):
             return None, None, None
     
     async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image], streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Generate image using input images for editing/reference with streaming."""
+        """Generate image using input images for editing/reference."""
         temp_filename = None
         try:
             # For image editing, we'll use the first image as primary
@@ -329,68 +290,20 @@ class GPTModelGenerator(BaseModelGenerator):
                 temp_filename = temp_file.name
             
             generated_image = None
-            
-            # Try streaming first - images.edit API also supports streaming  
-            try:
-                with open(temp_filename, 'rb') as img_file:
-                    stream = self.client.images.edit(
-                        model=self.model,
-                        image=img_file,  # Use file handle directly
-                        prompt=prompt,
-                        quality="medium",
-                        stream=True,
-                    )
-                
-                partial_count = 0
-                
-                for event in stream:
-                    if event.type == "image_generation.partial_image":
-                        partial_count += 1
-                        # Log partial image received for image editing
-                        logger.info(f"Received partial edited image {event.partial_image_index + 1}/3")
-                        
-                        # Update Discord message with partial image if callback provided
-                        if streaming_callback:
-                            try:
-                                # Convert partial image to PIL Image and send to callback
-                                if hasattr(event, 'b64_json') and event.b64_json:
-                                    image_bytes = base64.b64decode(event.b64_json)
-                                    partial_image = Image.open(io.BytesIO(image_bytes))
-                                    # Call callback with partial image instead of just text
-                                    await streaming_callback(f"Editing image... ({partial_count}/3)", partial_image)
-                                else:
-                                    # Fallback to text if no image data
-                                    await streaming_callback(f"Editing image... ({partial_count}/3)")
-                            except Exception as callback_error:
-                                logger.warning(f"Streaming callback failed: {callback_error}")
-                        
-                    elif event.type == "image_generation.done":
-                        # Final edited image
-                        image_base64 = event.b64_json
-                        image_bytes = base64.b64decode(image_base64)
-                        generated_image = Image.open(io.BytesIO(image_bytes))
-                
-                # If streaming worked, return the result
-                if generated_image is not None:
-                    text_response = prompt
-                    usage_metadata = {
-                        "prompt_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,
-                        "candidates_token_count": 0,
-                        "total_token_count": len(prompt.split()) * 1.3 + len(input_images) * 50,
-                    }
-                    return generated_image, text_response, usage_metadata
-                
-            except Exception as streaming_error:
-                logger.info(f"Streaming failed for image editing, falling back to non-streaming: {streaming_error}")
-            
-            # Fallback to non-streaming if streaming failed
+
+            if streaming_callback:
+                await streaming_callback("Editing image...")
+
             with open(temp_filename, 'rb') as img_file:
-                response = self.client.images.edit(
-                    model=self.model,
-                    image=img_file,  # Use file handle directly
-                    prompt=prompt,
-                    quality="medium",
-                )
+                image_data = img_file.read()
+            
+            response = await asyncio.to_thread(
+                self.client.images.edit,
+                model=self.model,
+                image=image_data,
+                prompt=prompt,
+                quality="medium",
+            )
             
             if response.data and len(response.data) > 0:
                 image_base64 = response.data[0].b64_json
