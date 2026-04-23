@@ -449,6 +449,9 @@ async def run_image_command(
     image_4: Optional[discord.Attachment] = None
 ):
     """Shared implementation for image slash commands."""
+    reserved_slots = 0
+    usage_consumed = False
+    
     if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
         await interaction.response.send_message(
             "❌ You don't have permission to use this bot in DMs. Only elevated users can use the bot in direct messages.",
@@ -459,60 +462,86 @@ async def run_image_command(
     if await check_usage_limit_and_respond(interaction):
         return
     
-    await interaction.response.defer()
-    
-    attachments = [image_1, image_2, image_3, image_4]
-    images = await download_command_images(attachments, interaction)
-    if images is None:
+    reservation_successful, next_available = usage_tracker.reserve_usage_slots(interaction.user.id, slots=1)
+    if not reservation_successful:
+        if next_available:
+            time_until_available = next_available - datetime.now()
+            hours = int(time_until_available.total_seconds() // 3600)
+            minutes = int((time_until_available.total_seconds() % 3600) // 60)
+            await interaction.response.send_message(
+                f"⏰ You've reached your usage limit. Please try again in {hours}h {minutes}m.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "⏰ You've reached your usage limit. Please try again later.",
+                ephemeral=True
+            )
         return
     
-    aspect_ratio, cleaned_prompt = extract_aspect_ratio(prompt)
-    generated_image, text_response, usage_metadata = await generate_image_for_model(model_type, cleaned_prompt, images, aspect_ratio)
+    if not usage_tracker.is_elevated_user(interaction.user.id) and usage_tracker.get_user_tier(interaction.user.id) != 'unlimited':
+        reserved_slots = 1
     
-    if usage_metadata and not interaction.user.bot:
-        prompt_tokens = usage_metadata.get("prompt_token_count", 0)
-        output_tokens = usage_metadata.get("candidates_token_count", 0)
-        total_tokens = usage_metadata.get("total_token_count", 0)
-        images_generated = 1 if generated_image else 0
-        usage_tracker.record_usage(
-            user_id=interaction.user.id,
-            username=interaction.user.display_name or interaction.user.name,
-            prompt_tokens=prompt_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            images_generated=images_generated
-        )
-    
-    responses = []
-    if text_response and text_response.strip():
-        responses.append(text_response)
-    
-    file = None
-    if generated_image:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{model_type}_{timestamp}.png"
-        filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
-        generated_image.save(filepath)
-        img_buffer = io.BytesIO()
-        generated_image.save(img_buffer, format='PNG')
-        img_buffer.seek(0)
-        file = discord.File(img_buffer, filename=filename)
-    
-    if not responses and not file:
-        await interaction.followup.send("I wasn't able to generate anything from your request. Please try again.")
-        return
-    
-    content = "\n".join(responses) if responses else None
-    chunks = split_long_message(content, max_length=1800) if content else []
-    first_chunk = chunks[0] if chunks else None
-    
-    if file:
-        await interaction.followup.send(content=first_chunk, file=file)
-    else:
-        await interaction.followup.send(content=first_chunk)
-    
-    for chunk in chunks[1:]:
-        await interaction.followup.send(content=chunk)
+    try:
+        await interaction.response.defer()
+        
+        attachments = [image_1, image_2, image_3, image_4]
+        images = await download_command_images(attachments, interaction)
+        if images is None:
+            return
+        
+        aspect_ratio, cleaned_prompt = extract_aspect_ratio(prompt)
+        generated_image, text_response, usage_metadata = await generate_image_for_model(model_type, cleaned_prompt, images, aspect_ratio)
+        
+        if usage_metadata and not interaction.user.bot:
+            prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+            output_tokens = usage_metadata.get("candidates_token_count", 0)
+            total_tokens = usage_metadata.get("total_token_count", 0)
+            images_generated = 1 if generated_image else 0
+            usage_tracker.record_usage(
+                user_id=interaction.user.id,
+                username=interaction.user.display_name or interaction.user.name,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                images_generated=images_generated,
+                consume_reserved_slots=1 if images_generated > 0 else 0
+            )
+            usage_consumed = images_generated > 0
+        
+        responses = []
+        if text_response and text_response.strip():
+            responses.append(text_response)
+        
+        file = None
+        if generated_image:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{model_type}_{timestamp}.png"
+            filepath = os.path.join(config.GENERATED_IMAGES_DIR, filename)
+            generated_image.save(filepath)
+            img_buffer = io.BytesIO()
+            generated_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            file = discord.File(img_buffer, filename=filename)
+        
+        if not responses and not file:
+            await interaction.followup.send("I wasn't able to generate anything from your request. Please try again.")
+            return
+        
+        content = "\n".join(responses) if responses else None
+        chunks = split_long_message(content, max_length=1800) if content else []
+        first_chunk = chunks[0] if chunks else None
+        
+        if file:
+            await interaction.followup.send(content=first_chunk, file=file)
+        else:
+            await interaction.followup.send(content=first_chunk)
+        
+        for chunk in chunks[1:]:
+            await interaction.followup.send(content=chunk)
+    finally:
+        if reserved_slots > 0 and not usage_consumed:
+            usage_tracker.release_reserved_usage_slots(interaction.user.id, slots=reserved_slots)
 
 
 @bot.tree.command(name='gemini-image', description='Generate or edit images with Gemini')
@@ -831,6 +860,8 @@ async def tier_slash(interaction: discord.Interaction, user: discord.User, tier:
 ])
 async def avatar_slash(interaction: discord.Interaction, template: app_commands.Choice[str], user: Optional[discord.User] = None):
     """Transform user's avatar with a themed template."""
+    reserved_slots = 0
+    usage_consumed = False
     try:
         # Check if interaction is from a DM channel and user is not elevated
         if is_dm_channel(interaction.channel) and not usage_tracker.is_elevated_user(interaction.user.id):
@@ -844,6 +875,26 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         # Check usage limit
         if await check_usage_limit_and_respond(interaction):
             return
+        
+        reservation_successful, next_available = usage_tracker.reserve_usage_slots(interaction.user.id, slots=1)
+        if not reservation_successful:
+            if next_available:
+                time_until_available = next_available - datetime.now()
+                hours = int(time_until_available.total_seconds() // 3600)
+                minutes = int((time_until_available.total_seconds() % 3600) // 60)
+                await interaction.response.send_message(
+                    f"⏰ You've reached your usage limit. Please try again in {hours}h {minutes}m.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "⏰ You've reached your usage limit. Please try again later.",
+                    ephemeral=True
+                )
+            return
+        
+        if not usage_tracker.is_elevated_user(interaction.user.id) and usage_tracker.get_user_tier(interaction.user.id) != 'unlimited':
+            reserved_slots = 1
         
         # Defer the response since this will take some time
         await interaction.response.defer()
@@ -899,8 +950,10 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
                     prompt_tokens=prompt_tokens,
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
-                    images_generated=images_generated
+                    images_generated=images_generated,
+                    consume_reserved_slots=1 if images_generated > 0 else 0
                 )
+                usage_consumed = images_generated > 0
             except Exception as e:
                 logger.warning(f"Could not track usage: {e}")
         
@@ -945,6 +998,9 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         except:
             # If followup fails, try to send a regular response
             pass
+    finally:
+        if reserved_slots > 0 and not usage_consumed:
+            usage_tracker.release_reserved_usage_slots(interaction.user.id, slots=reserved_slots)
 
 
 
@@ -1104,6 +1160,8 @@ async def wordplay_slash(
     style: Optional[str] = None
 ):
     """Start a wordplay puzzle where users guess the extra letter between two words."""
+    reserved_slots = 0
+    usage_consumed = False
     try:
         # Set defaults
         min_word_length = word_length if word_length is not None else 4
@@ -1132,11 +1190,9 @@ async def wordplay_slash(
             logger.info(f"Blocked non-elevated user {interaction.user.id} from using /wordplay in DM channel")
             return
         
-        # Check usage limit (8-hour cooldown)
-        has_reached_limit, next_available_time = usage_tracker.has_reached_usage_limit(interaction.user.id)
-        
-        # Skip limit check for elevated users
-        if has_reached_limit and not usage_tracker.is_elevated_user(interaction.user.id):
+        # Reserve usage slots up front to prevent over-queueing
+        reservation_successful, next_available_time = usage_tracker.reserve_usage_slots(interaction.user.id, slots=2)
+        if not reservation_successful:
             if next_available_time:
                 # Calculate time until next available use
                 time_until_available = next_available_time - datetime.now()
@@ -1154,6 +1210,9 @@ async def wordplay_slash(
                     ephemeral=True
                 )
             return
+        
+        if not usage_tracker.is_elevated_user(interaction.user.id) and usage_tracker.get_user_tier(interaction.user.id) != 'unlimited':
+            reserved_slots = 2
         
         # Defer response since this will take time
         await interaction.response.defer()
@@ -1216,8 +1275,10 @@ async def wordplay_slash(
             prompt_tokens=0,
             output_tokens=0,
             total_tokens=0,
-            images_generated=2  # Two images generated per puzzle
+            images_generated=2,  # Two images generated per puzzle
+            consume_reserved_slots=2
         )
+        usage_consumed = True
         
         # Save images to buffers for Discord
         img1_buffer = io.BytesIO()
@@ -1320,6 +1381,9 @@ async def wordplay_slash(
                 )
         except discord.DiscordException as discord_error:
             logger.error(f"Could not send error message: {discord_error}")
+    finally:
+        if reserved_slots > 0 and not usage_consumed:
+            usage_tracker.release_reserved_usage_slots(interaction.user.id, slots=reserved_slots)
 
 
 def main():
