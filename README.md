@@ -6,7 +6,7 @@ A multi-model Discord bot with text chat via OpenAI GPT-5.4 mini and image gener
 
 - **Conversational Mentions/Replies**: Mention the bot or reply to the bot for text-only GPT-5.4 mini responses
 - **Gemini Image Command**: `/gemini-image` supports prompt-only and prompt+image workflows
-- **OpenAI Image Command**: `/gpt-image` supports prompt-only and prompt+image workflows using `gpt-image-2` (`quality="medium"`)
+- **OpenAI Image Command**: `/gpt-image` supports prompt-only and prompt+image workflows using `gpt-image-2`. The `quality` parameter is set to `medium` for prompt-only generation and omitted for edits with input images.
 - **Multi-Image Processing**: Process multiple images in image commands
 - **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
 - **Bot Snitching**: Catches users who delete messages that mentioned the bot (within 8 hours) and playfully calls them out

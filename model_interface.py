@@ -269,7 +269,8 @@ class GPTModelGenerator(BaseModelGenerator):
             
         except Exception as e:
             logger.error(f"Error generating image with gpt-image-2: {e}")
-            return None, None, None
+            error_reason = str(e).strip() or "Unknown error"
+            return None, f"❌ Failed to generate image.\nAttempted prompt: {prompt}\nReason: {error_reason}", None
     
     async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image], streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image using input images for editing/reference."""
@@ -307,7 +308,6 @@ class GPTModelGenerator(BaseModelGenerator):
                     model=self.model,
                     image=image_data,
                     prompt=prompt,
-                    quality="medium",
                 )
 
             response = await asyncio.to_thread(
@@ -333,7 +333,8 @@ class GPTModelGenerator(BaseModelGenerator):
             
         except Exception as e:
             logger.error(f"Error generating image with input images: {e}")
-            return None, None, None
+            error_reason = str(e).strip() or "Unknown error"
+            return None, f"❌ Failed to generate image.\nAttempted prompt: {prompt}\nReason: {error_reason}", None
         finally:
             # Clean up temporary file if it exists
             try:
