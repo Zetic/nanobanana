@@ -321,10 +321,10 @@ class XAIRealtimeSession:
                 logger.info("XAI Realtime session created")
                 
             elif event_type == "session.updated":
-                logger.info("⚙️ XAI Realtime session configured successfully")
+                logger.info("XAI Realtime session configured")
                 
             elif event_type == "response.created":
-                logger.info("🤔 Bot is generating a response...")
+                logger.debug("Bot is generating a voice response")
                 self._response_in_progress = True
                 if self.on_response_started:
                     self.on_response_started()
@@ -347,7 +347,7 @@ class XAIRealtimeSession:
                 if self._audio_buffer:
                     self.on_audio_response(bytes(self._audio_buffer))
                     self._audio_buffer.clear()
-                logger.info("🔊 Audio response complete")
+                logger.debug("Audio response complete")
                 
             elif event_type == "response.audio_transcript.delta":
                 # Received text transcription of bot's response
@@ -360,19 +360,19 @@ class XAIRealtimeSession:
                 # Full transcription of bot's response
                 transcript = event.get("transcript", "")
                 if transcript:
-                    logger.info(f"🗣️ Bot said: \"{transcript}\"")
+                    logger.info(f"Bot said: \"{transcript}\"")
                         
             elif event_type == "conversation.item.input_audio_transcription.completed":
                 # User's speech was transcribed
                 transcript = event.get("transcript", "")
                 if transcript:
-                    logger.info(f"📝 User said: \"{transcript}\"")
+                    logger.info(f"User said: \"{transcript}\"")
                     
             elif event_type == "input_audio_buffer.speech_started":
-                logger.info("🎤 Speech detected")
+                logger.debug("Speech detected")
                 
             elif event_type == "input_audio_buffer.speech_stopped":
-                logger.info("🔇 Speech ended")
+                logger.debug("Speech ended")
                 # Commit audio buffer before requesting response
                 try:
                     await self._send_event({"type": "input_audio_buffer.commit"})
@@ -389,7 +389,7 @@ class XAIRealtimeSession:
                 })
                 
             elif event_type == "response.done":
-                logger.info("✅ Response complete")
+                logger.debug("Voice response complete")
                 self._response_in_progress = False
                 if self.on_response_done:
                     self.on_response_done()
