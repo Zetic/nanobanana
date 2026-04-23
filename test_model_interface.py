@@ -71,7 +71,7 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         kwargs = mock_images.edit.call_args.kwargs
         self.assertEqual(kwargs["model"], "gpt-image-2")
         self.assertEqual(kwargs["prompt"], "edit banana")
-        self.assertEqual(kwargs["quality"], "medium")
+        self.assertNotIn("quality", kwargs)
         self.assertNotIn("stream", kwargs)
         self.assertIsInstance(kwargs["image"], bytes)
         self.assertGreater(len(kwargs["image"]), 0)
@@ -80,6 +80,27 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_image.size, (2, 2))
         self.assertNotIn("response_format", kwargs)
         self.assertNotIn("partial_images", kwargs)
+
+    async def test_edit_failure_returns_prompt_and_reason(self):
+        mock_images = Mock()
+        mock_images.edit.side_effect = RuntimeError("Unknown parameter: 'quality'.")
+        mock_client = SimpleNamespace(images=mock_images)
+        input_image = Image.new("RGB", (2, 2), color="blue")
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), patch.object(
+            model_interface, "OpenAI", return_value=mock_client
+        ), patch.object(model_interface.asyncio, "to_thread", new=AsyncMock(side_effect=self._mock_to_thread_call)):
+            generator = model_interface.GPTModelGenerator()
+            image, text, usage = await generator._generate_image_with_input_images(
+                "invert this", [input_image]
+            )
+
+        self.assertIsNone(image)
+        self.assertIsNone(usage)
+        self.assertEqual(
+            text,
+            "❌ Failed to generate image.\nAttempted prompt: invert this\nReason: Unknown parameter: 'quality'.",
+        )
 
 
 if __name__ == "__main__":
