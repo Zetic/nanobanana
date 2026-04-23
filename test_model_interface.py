@@ -83,7 +83,7 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_edit_failure_returns_prompt_and_reason(self):
         mock_images = Mock()
-        mock_images.edit.side_effect = RuntimeError("Unknown parameter: 'quality'.")
+        mock_images.edit.side_effect = RuntimeError("Rate limit exceeded")
         mock_client = SimpleNamespace(images=mock_images)
         input_image = Image.new("RGB", (2, 2), color="blue")
 
@@ -99,7 +99,7 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(usage)
         self.assertEqual(
             text,
-            "❌ Failed to generate image.\nAttempted prompt: invert this\nReason: Unknown parameter: 'quality'.",
+            "❌ Failed to generate image.\nAttempted prompt: invert this\nReason: Rate limit exceeded",
         )
 
 
