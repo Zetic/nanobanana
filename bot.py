@@ -462,7 +462,11 @@ async def run_image_command(
     if await check_usage_limit_and_respond(interaction):
         return
     
-    reservation_successful, next_available = usage_tracker.reserve_usage_slots(interaction.user.id, slots=1)
+    reservation_successful, next_available = usage_tracker.reserve_usage_slots(
+        interaction.user.id,
+        slots=1,
+        username=interaction.user.display_name or interaction.user.name
+    )
     if not reservation_successful:
         if next_available:
             time_until_available = next_available - datetime.now()
@@ -479,8 +483,7 @@ async def run_image_command(
             )
         return
     
-    if not usage_tracker.is_elevated_user(interaction.user.id) and usage_tracker.get_user_tier(interaction.user.id) != 'unlimited':
-        reserved_slots = 1
+    reserved_slots = 1
     
     try:
         await interaction.response.defer()
@@ -505,7 +508,7 @@ async def run_image_command(
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 images_generated=images_generated,
-                consume_reserved_slots=1 if images_generated > 0 else 0
+                consume_reserved_slots=images_generated
             )
             usage_consumed = images_generated > 0
         
@@ -876,7 +879,11 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
         if await check_usage_limit_and_respond(interaction):
             return
         
-        reservation_successful, next_available = usage_tracker.reserve_usage_slots(interaction.user.id, slots=1)
+        reservation_successful, next_available = usage_tracker.reserve_usage_slots(
+            interaction.user.id,
+            slots=1,
+            username=interaction.user.display_name or interaction.user.name
+        )
         if not reservation_successful:
             if next_available:
                 time_until_available = next_available - datetime.now()
@@ -893,8 +900,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
                 )
             return
         
-        if not usage_tracker.is_elevated_user(interaction.user.id) and usage_tracker.get_user_tier(interaction.user.id) != 'unlimited':
-            reserved_slots = 1
+        reserved_slots = 1
         
         # Defer the response since this will take some time
         await interaction.response.defer()
@@ -951,7 +957,7 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
                     images_generated=images_generated,
-                    consume_reserved_slots=1 if images_generated > 0 else 0
+                    consume_reserved_slots=images_generated
                 )
                 usage_consumed = images_generated > 0
             except Exception as e:
@@ -1191,7 +1197,11 @@ async def wordplay_slash(
             return
         
         # Reserve usage slots up front to prevent over-queueing
-        reservation_successful, next_available_time = usage_tracker.reserve_usage_slots(interaction.user.id, slots=2)
+        reservation_successful, next_available_time = usage_tracker.reserve_usage_slots(
+            interaction.user.id,
+            slots=2,
+            username=interaction.user.display_name or interaction.user.name
+        )
         if not reservation_successful:
             if next_available_time:
                 # Calculate time until next available use
@@ -1211,8 +1221,7 @@ async def wordplay_slash(
                 )
             return
         
-        if not usage_tracker.is_elevated_user(interaction.user.id) and usage_tracker.get_user_tier(interaction.user.id) != 'unlimited':
-            reserved_slots = 2
+        reserved_slots = 2
         
         # Defer response since this will take time
         await interaction.response.defer()

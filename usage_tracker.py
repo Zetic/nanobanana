@@ -195,7 +195,13 @@ class UsageTracker:
             
             if consume_reserved_slots > 0:
                 current_pending = max(0, int(user_data.get("pending_usages", 0)))
-                user_data["pending_usages"] = max(0, current_pending - consume_reserved_slots)
+                if consume_reserved_slots > current_pending:
+                    logger.warning(
+                        f"Attempted to consume {consume_reserved_slots} reserved slots for user {user_id}, "
+                        f"but only {current_pending} slot(s) were pending"
+                    )
+                consumed_slots = min(consume_reserved_slots, current_pending)
+                user_data["pending_usages"] = current_pending - consumed_slots
             
             # Track image generation timestamp if any were generated
             if images_generated > 0:
@@ -218,7 +224,7 @@ class UsageTracker:
                        f"prompt={prompt_tokens}, output={output_tokens}, "
                        f"total={total_tokens}, images={images_generated}")
 
-    def reserve_usage_slots(self, user_id: int, slots: int = 1) -> Tuple[bool, Optional[datetime]]:
+    def reserve_usage_slots(self, user_id: int, slots: int = 1, username: Optional[str] = None) -> Tuple[bool, Optional[datetime]]:
         """
         Reserve usage slots for a queued request to prevent over-queueing.
         
@@ -244,7 +250,7 @@ class UsageTracker:
             # Create user entry if needed
             if user_id_str not in data["users"]:
                 data["users"][user_id_str] = {
-                    "username": "Unknown User",
+                    "username": username or "Unknown User",
                     "total_prompt_tokens": 0,
                     "total_output_tokens": 0,
                     "total_tokens": 0,
@@ -286,6 +292,14 @@ class UsageTracker:
     def release_reserved_usage_slots(self, user_id: int, slots: int = 1):
         """Release previously reserved usage slots."""
         if slots <= 0:
+            return
+        
+        # Elevated and unlimited users do not consume reserved slots
+        if user_id in config.ELEVATED_USERS:
+            return
+        
+        user_tier = self.get_user_tier(user_id)
+        if user_tier == 'unlimited':
             return
         
         with self._lock:
