@@ -274,48 +274,44 @@ class GPTModelGenerator(BaseModelGenerator):
     
     async def _generate_image_with_input_images(self, prompt: str, input_images: List[Image.Image], streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image using input images for editing/reference."""
-        temp_filename = None
         try:
-            # For image editing, we'll use the first image as primary
-            # OpenAI image edit API takes a single image, not a list
-            primary_image = input_images[0]
-            
-            # Convert PIL image to binary format for the API
-            # Some versions of OpenAI API work better with actual file handles
-            import tempfile
-            import os
-            
-            # Save to temporary file first (some APIs prefer this)
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
-                primary_image.save(temp_file.name, format='PNG')
-                temp_filename = temp_file.name
-            
             generated_image = None
 
             if streaming_callback:
                 await streaming_callback("Editing image...")
 
-            def _edit_image_request():
-                try:
-                    with open(temp_filename, 'rb') as img_file:
-                        image_data = img_file.read()
-                except Exception as file_error:
-                    raise RuntimeError(
-                        f"Failed to read image file for editing: {temp_filename}"
-                    ) from file_error
-                
-                return self.client.images.edit(
-                    model=self.model,
-                    image=image_data,
-                    prompt=prompt,
+            content_parts = [{"type": "input_text", "text": prompt}]
+            for input_image in input_images:
+                img_buffer = io.BytesIO()
+                input_image.save(img_buffer, format='PNG')
+                image_base64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+                content_parts.append(
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/png;base64,{image_base64}",
+                    }
+                )
+
+            def _responses_image_request():
+                return self.client.responses.create(
+                    model="gpt-5.4",
+                    tools=[{"type": "image_generation", "model": self.model}],
+                    input=[{"role": "user", "content": content_parts}],
                 )
 
             response = await asyncio.to_thread(
-                _edit_image_request
+                _responses_image_request
             )
-            
-            if response.data and len(response.data) > 0:
-                image_base64 = response.data[0].b64_json
+
+            output_items = getattr(response, "output", None) or []
+            image_base64 = None
+            for output_item in output_items:
+                if getattr(output_item, "type", None) == "image_generation_call":
+                    image_base64 = getattr(output_item, "result", None)
+                    if image_base64:
+                        break
+
+            if image_base64:
                 image_bytes = base64.b64decode(image_base64)
                 generated_image = Image.open(io.BytesIO(image_bytes))
             
@@ -335,13 +331,6 @@ class GPTModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image with input images: {e}")
             error_reason = str(e).strip() or "Unknown error"
             return None, f"❌ Failed to generate image.\nAttempted prompt: {prompt}\nReason: {error_reason}", None
-        finally:
-            # Clean up temporary file if it exists
-            try:
-                if temp_filename and os.path.exists(temp_filename):
-                    os.unlink(temp_filename)
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to cleanup temporary file: {cleanup_error}")
     
     async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""

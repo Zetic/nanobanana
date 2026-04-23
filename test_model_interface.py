@@ -49,10 +49,11 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_edit_stream_call_omits_unsupported_params(self):
         mock_images = Mock()
-        mock_images.edit.return_value = SimpleNamespace(
-            data=[SimpleNamespace(b64_json=_png_b64())]
+        mock_responses = Mock()
+        mock_responses.create.return_value = SimpleNamespace(
+            output=[SimpleNamespace(type="image_generation_call", result=_png_b64())]
         )
-        mock_client = SimpleNamespace(images=mock_images)
+        mock_client = SimpleNamespace(images=mock_images, responses=mock_responses)
         input_image = Image.new("RGB", (2, 2), color="blue")
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), patch.object(
@@ -68,23 +69,28 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(usage)
         mock_to_thread.assert_awaited_once()
 
-        kwargs = mock_images.edit.call_args.kwargs
-        self.assertEqual(kwargs["model"], "gpt-image-2")
-        self.assertEqual(kwargs["prompt"], "edit banana")
+        kwargs = mock_responses.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "gpt-5.4")
+        self.assertEqual(kwargs["tools"], [{"type": "image_generation", "model": "gpt-image-2"}])
+        self.assertEqual(kwargs["input"][0]["role"], "user")
+        self.assertEqual(kwargs["input"][0]["content"][0], {"type": "input_text", "text": "edit banana"})
+        input_image_payload = kwargs["input"][0]["content"][1]
+        self.assertEqual(input_image_payload["type"], "input_image")
+        self.assertTrue(input_image_payload["image_url"].startswith("data:image/png;base64,"))
+        decoded_image_bytes = base64.b64decode(input_image_payload["image_url"].split(",", 1)[1])
+        self.assertTrue(decoded_image_bytes.startswith(b"\x89PNG"))
         self.assertNotIn("quality", kwargs)
         self.assertNotIn("stream", kwargs)
-        self.assertIsInstance(kwargs["image"], bytes)
-        self.assertGreater(len(kwargs["image"]), 0)
-        self.assertTrue(kwargs["image"].startswith(b"\x89PNG"))
-        sent_image = Image.open(io.BytesIO(kwargs["image"]))
-        self.assertEqual(sent_image.size, (2, 2))
+        self.assertNotIn("prompt", kwargs)
         self.assertNotIn("response_format", kwargs)
         self.assertNotIn("partial_images", kwargs)
+        mock_images.edit.assert_not_called()
 
     async def test_edit_failure_returns_prompt_and_reason(self):
         mock_images = Mock()
-        mock_images.edit.side_effect = RuntimeError("Rate limit exceeded")
-        mock_client = SimpleNamespace(images=mock_images)
+        mock_responses = Mock()
+        mock_responses.create.side_effect = RuntimeError("Rate limit exceeded")
+        mock_client = SimpleNamespace(images=mock_images, responses=mock_responses)
         input_image = Image.new("RGB", (2, 2), color="blue")
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), patch.object(
