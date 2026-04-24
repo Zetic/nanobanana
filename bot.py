@@ -530,8 +530,11 @@ async def run_image_command(
         embed = discord.Embed(color=discord.Color.blue())
         
         # Text response from model in embed description
-        if text_response and text_response.strip():
-            desc = text_response.strip()
+        # Skip description if it's just echoing the prompt (e.g. gpt-image), since the Prompt field already shows it
+        text_response_stripped = text_response.strip() if text_response else ""
+        is_prompt_echo = text_response_stripped and cleaned_prompt and text_response_stripped == cleaned_prompt.strip()
+        if text_response_stripped and not is_prompt_echo:
+            desc = text_response_stripped
             if len(desc) > EMBED_DESCRIPTION_MAX_LENGTH:
                 desc = desc[:EMBED_DESCRIPTION_MAX_LENGTH - 3] + "..."
             embed.description = desc
