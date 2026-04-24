@@ -35,6 +35,10 @@ bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_c
 tracked_messages: Dict[int, Dict[str, Any]] = {}
 DEFAULT_SNITCH_CONTENT = "use me"  # Fallback text when message only contained bot mention
 
+# Discord embed character limits
+EMBED_DESCRIPTION_MAX_LENGTH = 4096
+EMBED_FIELD_VALUE_MAX_LENGTH = 1024
+
 def cleanup_old_tracked_messages():
     """Remove tracked messages older than 8 hours."""
     current_time = datetime.now()
@@ -505,11 +509,8 @@ async def run_image_command(
             )
             usage_consumed = images_generated > 0
         
-        responses = []
-        if text_response and text_response.strip():
-            responses.append(text_response)
-        
         file = None
+        filename = None
         if generated_image:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{model_type}_{timestamp}.png"
@@ -520,21 +521,58 @@ async def run_image_command(
             img_buffer.seek(0)
             file = discord.File(img_buffer, filename=filename)
         
-        if not responses and not file:
+        if not (text_response and text_response.strip()) and not file:
             await interaction.followup.send("I wasn't able to generate anything from your request. Please try again.")
             return
         
-        content = "\n".join(responses) if responses else None
-        chunks = split_long_message(content, max_length=1800) if content else []
-        first_chunk = chunks[0] if chunks else None
+        # Build response embed with image information
+        model_name_display = "Gemini" if model_type == "nanobanana" else "GPT Image 2"
+        embed = discord.Embed(color=discord.Color.blue())
+        
+        # Text response from model in embed description
+        if text_response and text_response.strip():
+            desc = text_response.strip()
+            if len(desc) > EMBED_DESCRIPTION_MAX_LENGTH:
+                desc = desc[:EMBED_DESCRIPTION_MAX_LENGTH - 3] + "..."
+            embed.description = desc
+        
+        # Prompt field
+        prompt_value = cleaned_prompt if cleaned_prompt and cleaned_prompt.strip() else "(no prompt)"
+        if len(prompt_value) > EMBED_FIELD_VALUE_MAX_LENGTH:
+            prompt_value = prompt_value[:EMBED_FIELD_VALUE_MAX_LENGTH - 3] + "..."
+        embed.add_field(name="Prompt", value=prompt_value, inline=False)
+        
+        # Resolution field (only if an image was generated)
+        if generated_image:
+            width, height = generated_image.size
+            pixel_count = width * height
+            embed.add_field(name="Resolution", value=f"{width}×{height} ({pixel_count:,} pixels)", inline=True)
+        
+        # Aspect ratio field (if one was specified)
+        if aspect_ratio:
+            embed.add_field(name="Aspect Ratio", value=aspect_ratio, inline=True)
+        
+        # Model field
+        embed.add_field(name="Model", value=model_name_display, inline=True)
+        
+        # Reference output image inline in the embed
+        if file:
+            embed.set_image(url=f"attachment://{filename}")
+        
+        # Build small embeds for each input image used
+        input_attachments = [a for a in [image_1, image_2, image_3, image_4] if a is not None]
+        input_embeds = []
+        for attachment in input_attachments:
+            input_embed = discord.Embed(color=discord.Color.light_grey())
+            input_embed.set_image(url=attachment.url)
+            input_embeds.append(input_embed)
+        
+        embeds = input_embeds + [embed]
         
         if file:
-            await interaction.followup.send(content=first_chunk, file=file)
+            await interaction.followup.send(embeds=embeds, file=file)
         else:
-            await interaction.followup.send(content=first_chunk)
-        
-        for chunk in chunks[1:]:
-            await interaction.followup.send(content=chunk)
+            await interaction.followup.send(embeds=embeds)
     finally:
         if reserved_slots > 0 and not usage_consumed:
             usage_tracker.release_reserved_usage_slots(interaction.user.id, slots=reserved_slots)
