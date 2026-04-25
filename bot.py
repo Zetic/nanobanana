@@ -1252,13 +1252,19 @@ class WordplayAnswerView(discord.ui.View):
 @app_commands.describe(
     word_length='Minimum length for the shorter word (default: 4)',
     letter_difference='Number of letters to add/remove (default: 1)',
-    style='Art style for the images (e.g., "anime", "watercolor"). Default is graphite pencil sketch.'
+    style='Art style for the images (e.g., "anime", "watercolor"). Default is graphite pencil sketch.',
+    model='Image model to use for generating puzzle images (default: gpt-image-2)'
 )
+@app_commands.choices(model=[
+    app_commands.Choice(name='GPT Image 2 (gpt-image-2)', value='gpt'),
+    app_commands.Choice(name='Gemini Flash Image (gemini-2.5-flash-image)', value='gemini'),
+])
 async def wordplay_slash(
     interaction: discord.Interaction,
     word_length: Optional[int] = None,
     letter_difference: Optional[int] = None,
-    style: Optional[str] = None
+    style: Optional[str] = None,
+    model: Optional[app_commands.Choice[str]] = None
 ):
     """Start a wordplay puzzle where users guess the extra letter between two words."""
     reserved_slots = 0
@@ -1323,8 +1329,9 @@ async def wordplay_slash(
         
         # Gemini generator for text tasks (word-pair generation, style prompts)
         text_generator = get_model_generator("nanobanana")
-        # GPT generator for image generation (uses gpt-image-2)
-        image_generator = get_model_generator("gpt")
+        # Image generator selected by the user (defaults to gpt-image-2)
+        image_model_type = model.value if model is not None else "gpt"
+        image_generator = get_model_generator(image_model_type)
         
         # Generate word pair with custom parameters
         word_pair = await generate_word_pair_with_gemini(text_generator, min_word_length, num_letters)
@@ -1340,8 +1347,9 @@ async def wordplay_slash(
         shorter_word, longer_word, extra_letters = word_pair
         logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letters})")
         
-        # Generate images for both words using gpt-image-2
-        status_msg = await interaction.followup.send("🎨 Generating puzzle images...", wait=True)
+        # Generate images for both words using the selected model
+        image_model_name = model.name if model is not None else "GPT Image 2 (gpt-image-2)"
+        status_msg = await interaction.followup.send(f"🎨 Generating puzzle images using {image_model_name}...", wait=True)
         
         image1 = await generate_word_image(image_generator, shorter_word, style, text_generator=text_generator)
         image2 = await generate_word_image(image_generator, longer_word, style, text_generator=text_generator)

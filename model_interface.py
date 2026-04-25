@@ -493,7 +493,7 @@ class ChatModelGenerator(BaseModelGenerator):
 # Factory function to get the appropriate generator
 def get_model_generator(model_type: str) -> BaseModelGenerator:
     """Get the appropriate model generator based on model type."""
-    if model_type == "nanobanana":
+    if model_type in ("nanobanana", "gemini"):
         return GeminiModelGenerator()
     elif model_type == "gpt":
         return GPTModelGenerator()
