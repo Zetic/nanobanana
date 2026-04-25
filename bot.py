@@ -8,6 +8,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
+from PIL import Image
 
 import config
 from image_utils import download_image
@@ -323,23 +324,58 @@ async def extract_text_from_message(message):
     
     return content
 
+async def collect_message_images(message) -> List[Image.Image]:
+    """Download and return image attachments from a Discord message."""
+    images = []
+    for attachment in message.attachments:
+        if attachment.content_type and attachment.content_type.startswith('image/'):
+            img = await download_image(attachment.url)
+            if img:
+                images.append(img)
+            else:
+                logger.warning(f"Failed to download image attachment {attachment.filename}")
+    return images
+
+
 async def handle_conversation_request(message):
     """Handle text-only conversational responses for mentions/replies."""
     try:
         response_message = await message.reply("Thinking...")
         text_content = await extract_text_from_message(message)
-        
-        if not text_content.strip():
-            await response_message.edit(content="Please include some text in your message.")
+
+        # Collect images from the current message's attachments
+        images = await collect_message_images(message)
+
+        # If this message is a reply, include the referenced message's content and images
+        if message.reference and message.reference.message_id:
+            referenced = message.reference.cached_message
+            if referenced is None:
+                try:
+                    referenced = await message.channel.fetch_message(message.reference.message_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    referenced = None
+
+            if referenced:
+                ref_text = referenced.content.strip() if referenced.content else ""
+                if ref_text:
+                    author_name = referenced.author.display_name if referenced.author else "Unknown"
+                    text_content = f"[Replied to @{author_name}: {ref_text}]\n\n{text_content}"
+
+                # Place referenced message images first so the model sees them before the reply
+                ref_images = await collect_message_images(referenced)
+                images = ref_images + images
+
+        if not text_content.strip() and not images:
+            await response_message.edit(content="Please include some text or an image in your message.")
             return
-        
+
         generator = get_model_generator("chat")
-        _, text_response, _ = await generator.generate_text_only_response(text_content)
-        
+        _, text_response, _ = await generator.generate_text_only_response(text_content, images if images else None)
+
         if not text_response or not text_response.strip():
             await response_message.edit(content="I couldn't generate a response. Please try again.")
             return
-        
+
         chunks = split_long_message(text_response, max_length=1800)
         await response_message.edit(content=chunks[0])
         for chunk in chunks[1:]:
