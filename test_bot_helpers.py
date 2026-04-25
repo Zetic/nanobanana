@@ -35,6 +35,43 @@ class TestGetGitCommitHash(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestFormatElapsedTime(unittest.TestCase):
+    def test_sub_second_returns_milliseconds(self):
+        self.assertEqual(bot.format_elapsed_time(0.25), "250ms")
+
+    def test_zero_returns_zero_milliseconds(self):
+        self.assertEqual(bot.format_elapsed_time(0.0), "0ms")
+
+    def test_just_under_one_second_returns_milliseconds(self):
+        self.assertEqual(bot.format_elapsed_time(0.999), "999ms")
+
+    def test_exactly_one_second_returns_seconds(self):
+        self.assertEqual(bot.format_elapsed_time(1.0), "1s")
+
+    def test_whole_seconds_returned(self):
+        self.assertEqual(bot.format_elapsed_time(97.0), "97s")
+
+    def test_fractional_seconds_rounded(self):
+        self.assertEqual(bot.format_elapsed_time(97.6), "98s")
+
+
+class TestBuildEmbedFooter(unittest.TestCase):
+    def test_with_commit_hash(self):
+        with patch.object(bot, "_git_commit_hash", "b97f08e"):
+            result = bot.build_embed_footer(97.0)
+        self.assertEqual(result, "ZPT b97f08e | Thought for 97s")
+
+    def test_with_commit_hash_milliseconds(self):
+        with patch.object(bot, "_git_commit_hash", "b97f08e"):
+            result = bot.build_embed_footer(0.5)
+        self.assertEqual(result, "ZPT b97f08e | Thought for 500ms")
+
+    def test_without_commit_hash(self):
+        with patch.object(bot, "_git_commit_hash", None):
+            result = bot.build_embed_footer(5.0)
+        self.assertEqual(result, "ZPT | Thought for 5s")
+
+
 class TestBotHelpers(unittest.IsolatedAsyncioTestCase):
     async def test_generate_image_for_model_text_only(self):
         mock_generator = SimpleNamespace(
