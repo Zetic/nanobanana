@@ -6,6 +6,7 @@ import asyncio
 import io
 import os
 import re
+import subprocess
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -39,6 +40,22 @@ DEFAULT_SNITCH_CONTENT = "use me"  # Fallback text when message only contained b
 EMBED_DESCRIPTION_MAX_LENGTH = 4096
 EMBED_FIELD_VALUE_MAX_LENGTH = 1024
 
+def get_git_commit_hash() -> Optional[str]:
+    """Return the current git commit hash shortened to 7 characters, or None if unavailable."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short=7', 'HEAD'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as e:
+        logger.debug(f'Failed to get git commit hash: {e}')
+    return None
+
+
 def cleanup_old_tracked_messages():
     """Remove tracked messages older than 8 hours."""
     current_time = datetime.now()
@@ -59,7 +76,15 @@ async def on_ready():
     """Called when the bot is ready."""
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
-    
+
+    # Set bot status to the current git commit hash
+    commit_hash = get_git_commit_hash()
+    if commit_hash:
+        logger.info(f'Setting bot status to git commit: {commit_hash}')
+        await bot.change_presence(activity=discord.Game(name=commit_hash))
+    else:
+        logger.warning('Could not determine git commit hash; bot status will not be set')
+
     # Sync slash commands
     try:
         synced = await bot.tree.sync()
