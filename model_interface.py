@@ -250,7 +250,6 @@ class GPTModelGenerator(BaseModelGenerator):
                 model=self.model,
                 prompt=prompt,
                 quality="medium",
-                seed=random.randint(0, 2**31 - 1),
             )
             
             generated_image = None
@@ -296,11 +295,10 @@ class GPTModelGenerator(BaseModelGenerator):
                     }
                 )
 
-            seed = random.randint(0, 2**31 - 1)
             def _responses_image_request():
                 return self.client.responses.create(
                     model="gpt-5.4",
-                    tools=[{"type": "image_generation", "model": self.model, "seed": seed}],
+                    tools=[{"type": "image_generation", "model": self.model}],
                     input=[{"role": "user", "content": content_parts}],
                 )
 
