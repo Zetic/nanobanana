@@ -43,6 +43,8 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["model"], "gpt-image-2")
         self.assertEqual(kwargs["prompt"], "banana")
         self.assertEqual(kwargs["quality"], "medium")
+        self.assertIn("seed", kwargs)
+        self.assertIsInstance(kwargs["seed"], int)
         self.assertNotIn("stream", kwargs)
         self.assertNotIn("response_format", kwargs)
         self.assertNotIn("partial_images", kwargs)
@@ -71,7 +73,12 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
 
         kwargs = mock_responses.create.call_args.kwargs
         self.assertEqual(kwargs["model"], "gpt-5.4")
-        self.assertEqual(kwargs["tools"], [{"type": "image_generation", "model": "gpt-image-2"}])
+        self.assertEqual(len(kwargs["tools"]), 1)
+        tool = kwargs["tools"][0]
+        self.assertEqual(tool["type"], "image_generation")
+        self.assertEqual(tool["model"], "gpt-image-2")
+        self.assertIn("seed", tool)
+        self.assertIsInstance(tool["seed"], int)
         self.assertEqual(kwargs["input"][0]["role"], "user")
         self.assertEqual(kwargs["input"][0]["content"][0], {"type": "input_text", "text": "edit banana"})
         input_image_payload = kwargs["input"][0]["content"][1]

@@ -7,6 +7,7 @@ import io
 import logging
 import base64
 import asyncio
+import random
 from abc import ABC, abstractmethod
 from PIL import Image
 from google import genai
@@ -126,6 +127,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
+                config=types.GenerateContentConfig(seed=random.randint(0, 2**31 - 1)),
             )
             
             image = self._extract_image_from_response(response)
@@ -171,6 +173,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
+                config=types.GenerateContentConfig(seed=random.randint(0, 2**31 - 1)),
             )
             
             image = self._extract_image_from_response(response)
@@ -247,6 +250,7 @@ class GPTModelGenerator(BaseModelGenerator):
                 model=self.model,
                 prompt=prompt,
                 quality="medium",
+                seed=random.randint(0, 2**31 - 1),
             )
             
             generated_image = None
@@ -292,10 +296,11 @@ class GPTModelGenerator(BaseModelGenerator):
                     }
                 )
 
+            seed = random.randint(0, 2**31 - 1)
             def _responses_image_request():
                 return self.client.responses.create(
                     model="gpt-5.4",
-                    tools=[{"type": "image_generation", "model": self.model}],
+                    tools=[{"type": "image_generation", "model": self.model, "seed": seed}],
                     input=[{"role": "user", "content": content_parts}],
                 )
 
