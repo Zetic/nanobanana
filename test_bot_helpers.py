@@ -75,16 +75,32 @@ def _make_attachment(filename="img.png", content_type="image/png", url="http://e
     return a
 
 
-def _make_message(content="hello", attachments=None, reference=None):
+def _make_message(content="hello", attachments=None, reference=None, embeds=None):
     """Create a minimal mock Discord message."""
     msg = MagicMock()
     msg.content = content
     msg.attachments = attachments or []
+    msg.embeds = embeds or []
     msg.reference = reference
     msg.reply = AsyncMock()
     msg.channel.send = AsyncMock()
     msg.channel.fetch_message = AsyncMock(return_value=None)
     return msg
+
+
+def _make_embed(description=None, fields=None, image_url=None, thumbnail_url=None):
+    """Create a minimal mock Discord embed."""
+    embed = MagicMock()
+    embed.description = description
+    embed.fields = []
+    for name, value in (fields or []):
+        field = MagicMock()
+        field.name = name
+        field.value = value
+        embed.fields.append(field)
+    embed.image = MagicMock(url=image_url) if image_url else None
+    embed.thumbnail = MagicMock(url=thumbnail_url) if thumbnail_url else None
+    return embed
 
 
 class TestCollectMessageImages(unittest.IsolatedAsyncioTestCase):
@@ -121,6 +137,43 @@ class TestCollectMessageImages(unittest.IsolatedAsyncioTestCase):
             images = await bot.collect_message_images(msg)
 
         self.assertEqual(images, [])
+
+    async def test_embed_image_downloaded(self):
+        """Images inside an embed's image field are downloaded."""
+        embed = _make_embed(image_url="http://example.com/embed.png")
+        msg = _make_message(attachments=[], embeds=[embed])
+
+        fake_img = object()
+        with patch("bot.download_image", AsyncMock(return_value=fake_img)):
+            images = await bot.collect_message_images(msg)
+
+        self.assertEqual(images, [fake_img])
+
+    async def test_embed_thumbnail_downloaded(self):
+        """Images inside an embed's thumbnail field are downloaded."""
+        embed = _make_embed(thumbnail_url="http://example.com/thumb.png")
+        msg = _make_message(attachments=[], embeds=[embed])
+
+        fake_img = object()
+        with patch("bot.download_image", AsyncMock(return_value=fake_img)):
+            images = await bot.collect_message_images(msg)
+
+        self.assertEqual(images, [fake_img])
+
+    async def test_embed_image_not_duplicated_when_also_attachment(self):
+        """If the same URL appears as both an attachment and an embed image, it is only downloaded once."""
+        shared_url = "http://example.com/shared.png"
+        attachment = _make_attachment(url=shared_url)
+        embed = _make_embed(image_url=shared_url)
+        msg = _make_message(attachments=[attachment], embeds=[embed])
+
+        fake_img = object()
+        mock_dl = AsyncMock(return_value=fake_img)
+        with patch("bot.download_image", mock_dl):
+            images = await bot.collect_message_images(msg)
+
+        mock_dl.assert_called_once_with(shared_url)
+        self.assertEqual(images, [fake_img])
 
 
 class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
@@ -227,6 +280,72 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
         edit_kwargs = response_msg.edit.call_args
         self.assertIn("image", edit_kwargs[1]["content"].lower())
         mock_generator.generate_text_only_response.assert_not_called()
+
+    async def test_embed_text_from_replied_message_included(self):
+        """Embed description and fields from the replied-to message are included in context."""
+        embed = _make_embed(
+            description="A generated story",
+            fields=[("Prompt", "write a story"), ("Model", "Gemini")],
+        )
+        ref_author = MagicMock()
+        ref_author.display_name = "BotUser"
+        ref_msg = _make_message(content="", attachments=[], embeds=[embed])
+        ref_msg.author = ref_author
+
+        reference = MagicMock()
+        reference.message_id = 7
+        reference.cached_message = ref_msg
+
+        user_msg = _make_message(content="continue this", attachments=[], reference=reference)
+
+        response_msg = AsyncMock()
+        user_msg.reply = AsyncMock(return_value=response_msg)
+
+        mock_generator = MagicMock()
+        mock_generator.generate_text_only_response = AsyncMock(return_value=(None, "Continuation...", {}))
+
+        with patch("bot.get_model_generator", return_value=mock_generator), \
+             patch("bot.extract_text_from_message", AsyncMock(return_value="continue this")), \
+             patch("bot.download_image", AsyncMock(return_value=None)):
+            await bot.handle_conversation_request(user_msg)
+
+        call_args = mock_generator.generate_text_only_response.call_args
+        prompt_sent = call_args[0][0]
+        self.assertIn("A generated story", prompt_sent)
+        self.assertIn("Prompt", prompt_sent)
+        self.assertIn("write a story", prompt_sent)
+        self.assertIn("continue this", prompt_sent)
+
+    async def test_embed_image_from_replied_message_passed(self):
+        """Images inside an embed of the replied-to message are forwarded to the model."""
+        embed = _make_embed(image_url="http://cdn.example.com/generated.png")
+        ref_author = MagicMock()
+        ref_author.display_name = "BotUser"
+        ref_msg = _make_message(content="", attachments=[], embeds=[embed])
+        ref_msg.author = ref_author
+
+        reference = MagicMock()
+        reference.message_id = 8
+        reference.cached_message = ref_msg
+
+        user_msg = _make_message(content="write a story for this image", attachments=[], reference=reference)
+
+        response_msg = AsyncMock()
+        user_msg.reply = AsyncMock(return_value=response_msg)
+
+        fake_img = object()
+        mock_generator = MagicMock()
+        mock_generator.generate_text_only_response = AsyncMock(return_value=(None, "Once upon a time...", {}))
+
+        with patch("bot.get_model_generator", return_value=mock_generator), \
+             patch("bot.extract_text_from_message", AsyncMock(return_value="write a story for this image")), \
+             patch("bot.download_image", AsyncMock(return_value=fake_img)):
+            await bot.handle_conversation_request(user_msg)
+
+        call_args = mock_generator.generate_text_only_response.call_args
+        images_sent = call_args[0][1]
+        self.assertIsNotNone(images_sent)
+        self.assertIn(fake_img, images_sent)
 
 
 if __name__ == "__main__":

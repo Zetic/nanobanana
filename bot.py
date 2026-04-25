@@ -350,15 +350,32 @@ async def extract_text_from_message(message):
     return content
 
 async def collect_message_images(message) -> List[Image.Image]:
-    """Download and return image attachments from a Discord message."""
+    """Download and return image attachments and embed images from a Discord message."""
     images = []
+    seen_urls = set()
     for attachment in message.attachments:
         if attachment.content_type and attachment.content_type.startswith('image/'):
+            seen_urls.add(attachment.url)
             img = await download_image(attachment.url)
             if img:
                 images.append(img)
             else:
                 logger.warning(f"Failed to download image attachment {attachment.filename}")
+
+    # Also collect images embedded in Discord embeds (e.g. bot-generated images shown inside an embed)
+    for embed in message.embeds:
+        embed_image_urls = []
+        if embed.image:
+            embed_image_urls.append(embed.image.url)
+        if embed.thumbnail:
+            embed_image_urls.append(embed.thumbnail.url)
+        for url in embed_image_urls:
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                img = await download_image(url)
+                if img:
+                    images.append(img)
+
     return images
 
 
@@ -382,6 +399,17 @@ async def handle_conversation_request(message):
 
             if referenced:
                 ref_text = referenced.content.strip() if referenced.content else ""
+
+                # Also extract text from embeds (bot messages often store content in embeds)
+                for embed in referenced.embeds:
+                    embed_parts = []
+                    if embed.description:
+                        embed_parts.append(embed.description)
+                    for field in embed.fields:
+                        embed_parts.append(f"{field.name}: {field.value}")
+                    if embed_parts:
+                        ref_text = f"{ref_text}\n{'\n'.join(embed_parts)}".strip() if ref_text else "\n".join(embed_parts)
+
                 if ref_text:
                     author_name = referenced.author.display_name if referenced.author else "Unknown"
                     text_content = f"[Replied to @{author_name}: {ref_text}]\n\n{text_content}"
