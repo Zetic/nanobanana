@@ -7,6 +7,7 @@ import io
 import os
 import re
 import subprocess
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
@@ -57,6 +58,23 @@ def get_git_commit_hash() -> Optional[str]:
     return None
 
 
+# Cached git commit hash set once at startup in on_ready
+_git_commit_hash: Optional[str] = None
+
+
+def format_elapsed_time(elapsed_seconds: float) -> str:
+    """Format elapsed time as milliseconds (if under 1 second) or whole seconds."""
+    if elapsed_seconds < 1.0:
+        return f"{int(elapsed_seconds * 1000)}ms"
+    return f"{round(elapsed_seconds)}s"
+
+
+def build_embed_footer(elapsed_seconds: float) -> str:
+    """Build the standard embed footer: 'ZPT <hash> | Thought for <time>'."""
+    version = f"ZPT {_git_commit_hash}" if _git_commit_hash else "ZPT"
+    return f"{version} | Thought for {format_elapsed_time(elapsed_seconds)}"
+
+
 def cleanup_old_tracked_messages():
     """Remove tracked messages older than 8 hours."""
     current_time = datetime.now()
@@ -75,14 +93,16 @@ def cleanup_old_tracked_messages():
 @bot.event
 async def on_ready():
     """Called when the bot is ready."""
+    global _git_commit_hash
     logger.info(f'{bot.user} has connected to Discord!')
     logger.info(f'Bot is in {len(bot.guilds)} guilds')
 
-    # Set bot status to the current git commit hash
-    commit_hash = get_git_commit_hash()
-    if commit_hash:
-        logger.info(f'Setting bot status to git commit: {commit_hash}')
-        await bot.change_presence(activity=discord.Game(name=commit_hash))
+    # Cache the git commit hash and set bot status to "ZPT <hash>"
+    _git_commit_hash = get_git_commit_hash()
+    if _git_commit_hash:
+        status = f"ZPT {_git_commit_hash}"
+        logger.info(f'Setting bot status to: {status}')
+        await bot.change_presence(activity=discord.Game(name=status))
     else:
         logger.warning('Could not determine git commit hash; bot status will not be set')
 
@@ -572,6 +592,7 @@ async def run_image_command(
     reserved_slots = 1
     
     try:
+        start_time = time.monotonic()
         await interaction.response.defer()
         
         attachments = [image_1, image_2, image_3, image_4]
@@ -650,6 +671,9 @@ async def run_image_command(
         # Reference output image inline in the embed
         if file:
             embed.set_image(url=f"attachment://{filename}")
+        
+        # Footer with bot version and elapsed time
+        embed.set_footer(text=build_embed_footer(time.monotonic() - start_time))
         
         # Build small embeds for each input image used
         input_attachments = [a for a in [image_1, image_2, image_3, image_4] if a is not None]
@@ -1347,6 +1371,7 @@ async def wordplay_slash(
         reserved_slots = 2
         
         # Defer response since this will take time
+        start_time = time.monotonic()
         await interaction.response.defer()
         
         # Gemini generator for text tasks (word-pair generation, style prompts)
@@ -1473,7 +1498,7 @@ async def wordplay_slash(
             inline=False
         )
         
-        embed.set_footer(text="Good luck! 🍀")
+        embed.set_footer(text=build_embed_footer(time.monotonic() - start_time))
         
         # Send the puzzle first to get the message ID
         puzzle_message = await interaction.followup.send(
