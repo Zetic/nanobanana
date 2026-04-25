@@ -1256,8 +1256,8 @@ class WordplayAnswerView(discord.ui.View):
     model='Image model to use for generating puzzle images (default: gpt-image-2)'
 )
 @app_commands.choices(model=[
-    app_commands.Choice(name='GPT Image 2 (gpt-image-2)', value='gpt'),
     app_commands.Choice(name='Gemini Flash Image (gemini-2.5-flash-image)', value='gemini'),
+    app_commands.Choice(name='GPT Image 2 (gpt-image-2)', value='gpt'),
 ])
 async def wordplay_slash(
     interaction: discord.Interaction,
@@ -1329,8 +1329,8 @@ async def wordplay_slash(
         
         # Gemini generator for text tasks (word-pair generation, style prompts)
         text_generator = get_model_generator("nanobanana")
-        # Image generator selected by the user (defaults to gpt-image-2)
-        image_model_type = model.value if model is not None else "gpt"
+        # Image generator selected by the user (defaults to gemini-2.5-flash-image)
+        image_model_type = model.value if model is not None else "gemini"
         image_generator = get_model_generator(image_model_type)
         
         # Generate word pair with custom parameters
@@ -1348,7 +1348,7 @@ async def wordplay_slash(
         logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letters})")
         
         # Generate images for both words using the selected model
-        image_model_name = model.name if model is not None else "GPT Image 2 (gpt-image-2)"
+        image_model_name = model.name if model is not None else "Gemini Flash Image (gemini-2.5-flash-image)"
         status_msg = await interaction.followup.send(f"🎨 Generating puzzle images using {image_model_name}...", wait=True)
         
         image1 = await generate_word_image(image_generator, shorter_word, style, text_generator=text_generator)
