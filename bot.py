@@ -1260,11 +1260,13 @@ async def wordplay_slash(
         # Defer response since this will take time
         await interaction.response.defer()
         
-        # Get the Gemini model generator (nanobanana uses gemini-2.5-flash-image by default)
-        generator = get_model_generator("nanobanana")
+        # Gemini generator for text tasks (word-pair generation, style prompts)
+        text_generator = get_model_generator("nanobanana")
+        # GPT generator for image generation (uses gpt-image-2)
+        image_generator = get_model_generator("gpt")
         
         # Generate word pair with custom parameters
-        word_pair = await generate_word_pair_with_gemini(generator, min_word_length, num_letters)
+        word_pair = await generate_word_pair_with_gemini(text_generator, min_word_length, num_letters)
         
         if not word_pair:
             await interaction.followup.send(
@@ -1277,11 +1279,11 @@ async def wordplay_slash(
         shorter_word, longer_word, extra_letters = word_pair
         logger.info(f"Generated word pair for {interaction.user.id}: {shorter_word} -> {longer_word} (extra: {extra_letters})")
         
-        # Generate images for both words
+        # Generate images for both words using gpt-image-2
         status_msg = await interaction.followup.send("🎨 Generating puzzle images...", wait=True)
         
-        image1 = await generate_word_image(generator, shorter_word, style)
-        image2 = await generate_word_image(generator, longer_word, style)
+        image1 = await generate_word_image(image_generator, shorter_word, style, text_generator=text_generator)
+        image2 = await generate_word_image(image_generator, longer_word, style, text_generator=text_generator)
         
         # Check if both images were generated successfully
         if not image1 or not image2:

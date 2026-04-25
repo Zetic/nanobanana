@@ -285,18 +285,21 @@ def validate_word_pair(shorter_word: str, longer_word: str, extra_letters: str) 
     return can_remove_letters(set())
 
 
-async def generate_word_image(generator, word: str, style: Optional[str] = None) -> Optional[Image.Image]:
+async def generate_word_image(generator, word: str, style: Optional[str] = None, text_generator=None) -> Optional[Image.Image]:
     """
-    Generate an image representing a word using Gemini.
+    Generate an image representing a word using the provided image model generator.
     
     Args:
-        generator: The model generator to use
+        generator: The image model generator to use for image generation.
         word: The word to visualize
         style: Optional style theme for the image (e.g., "anime", "watercolor", etc.)
+        text_generator: Optional separate text model generator used for style prompt
+                        generation. Falls back to ``generator`` if not provided.
     
     Returns:
         PIL Image or None if generation fails
     """
+    _text_gen = text_generator if text_generator is not None else generator
     if style:
         # Generate a style-based prompt using AI
         style_prompt = f"""Generate an image generation prompt for the word "{word}" in the style of "{style}".
@@ -311,7 +314,7 @@ Create a detailed prompt that captures the essence of the {style} style while ma
         
         try:
             # Get style-based prompt from AI
-            _, generated_prompt, _ = await generator.generate_text_only_response(style_prompt)
+            _, generated_prompt, _ = await _text_gen.generate_text_only_response(style_prompt)
             if generated_prompt:
                 prompt = generated_prompt.strip()
                 logger.info(f"Generated style-based prompt for {word} in {style} style")
