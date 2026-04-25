@@ -12,7 +12,7 @@ from PIL import Image
 from google import genai
 from google.genai import types
 from openai import OpenAI
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, Union
 import config
 
 logger = logging.getLogger(__name__)
@@ -426,6 +426,21 @@ class ChatModelGenerator(BaseModelGenerator):
     async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text response using OpenAI GPT-5.4 mini."""
         try:
+            if input_images:
+                content: Union[str, List[Dict[str, Any]]] = [{"type": "text", "text": prompt}]
+                for image in input_images:
+                    img_buffer = io.BytesIO()
+                    image.save(img_buffer, format='PNG')
+                    image_base64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{image_base64}"
+                        }
+                    })
+            else:
+                content = prompt
+
             response = self.client.chat.completions.create(
                 model=self.text_only_model,
                 messages=[
@@ -435,7 +450,7 @@ class ChatModelGenerator(BaseModelGenerator):
                     },
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": content
                     }
                 ],
             )
