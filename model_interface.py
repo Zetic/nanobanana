@@ -4,6 +4,7 @@ This provides a unified interface for different AI model providers.
 """
 
 import io
+import json
 import logging
 import base64
 import asyncio
@@ -38,8 +39,8 @@ class BaseModelGenerator(ABC):
         pass
         
     @abstractmethod
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
-        """Generate text-only response. Returns (None, text_response, usage_metadata)."""
+    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate a response. Returns (image_or_none, text_response, usage_metadata). The image is non-None only when the implementation supports tool-based image generation."""
         pass
 
 
@@ -379,8 +380,40 @@ class GPTModelGenerator(BaseModelGenerator):
             return None, None, None
 
 
+# Tool definition for image generation, used by ChatModelGenerator
+IMAGE_GENERATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "generate_image",
+        "description": (
+            "Generate an image based on a text description. "
+            "Use this when the user requests image creation or generation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed text description of the image to generate.",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["gemini", "gpt"],
+                    "description": (
+                        "The AI model to use for image generation. "
+                        "Use 'gemini' for creative or artistic images; "
+                        "use 'gpt' for photorealistic or detailed images."
+                    ),
+                },
+            },
+            "required": ["prompt", "model"],
+        },
+    },
+}
+
+
 class ChatModelGenerator(BaseModelGenerator):
-    """Handles text-only chat responses using OpenAI GPT-5.4 mini."""
+    """Handles text chat responses using OpenAI GPT-5.4 mini, with image generation tool support."""
     
     def __init__(self):
         if not config.OPENAI_API_KEY:
@@ -425,9 +458,18 @@ class ChatModelGenerator(BaseModelGenerator):
                 "candidates_token_count": 0,
                 "total_token_count": 0,
             }
-    
-    async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
-        """Generate text response using OpenAI GPT-5.4 mini."""
+
+    async def _execute_image_generation_tool(self, prompt: str, model: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Execute the image generation tool using the specified model ('gemini' or 'gpt')."""
+        try:
+            generator = get_model_generator(model)
+            return await generator.generate_image_from_text(prompt)
+        except Exception as e:
+            logger.error(f"Error executing image generation tool (model={model}): {e}")
+            return None, None, None
+
+    async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate a response using OpenAI GPT-5.4 mini with image generation tool support."""
         try:
             if input_images:
                 content: Union[str, List[Dict[str, Any]]] = [{"type": "text", "text": prompt}]
@@ -449,18 +491,57 @@ class ChatModelGenerator(BaseModelGenerator):
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful Discord assistant. Reply in plain text only."
+                        "content": (
+                            "You are a helpful Discord assistant. Reply in plain text only. "
+                            "Use the generate_image tool when the user requests image creation or generation."
+                        ),
                     },
                     {
                         "role": "user",
                         "content": content
                     }
                 ],
+                tools=[IMAGE_GENERATION_TOOL],
+                tool_choice="auto",
             )
-            
-            text = self._extract_text_from_response(response)
+
             usage = self._extract_usage_from_response(response)
-            
+
+            # Check whether the model decided to call the image generation tool
+            message = response.choices[0].message if response.choices else None
+            if message and getattr(message, "tool_calls", None):
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == "generate_image":
+                        args = json.loads(tool_call.function.arguments)
+
+                        image_prompt = args.get("prompt")
+                        if not image_prompt:
+                            logger.warning("generate_image tool call missing 'prompt'; falling back to user prompt")
+                            image_prompt = prompt
+
+                        image_model = args.get("model")
+                        if not image_model:
+                            logger.warning("generate_image tool call missing 'model'; defaulting to 'gemini'")
+                            image_model = "gemini"
+
+                        generated_image, image_text, image_usage = await self._execute_image_generation_tool(
+                            image_prompt, image_model
+                        )
+
+                        # Merge usage from both the chat call and the image generation call
+                        if image_usage and usage:
+                            combined_usage = {
+                                "prompt_token_count": usage.get("prompt_token_count", 0) + image_usage.get("prompt_token_count", 0),
+                                "candidates_token_count": usage.get("candidates_token_count", 0) + image_usage.get("candidates_token_count", 0),
+                                "total_token_count": usage.get("total_token_count", 0) + image_usage.get("total_token_count", 0),
+                            }
+                        else:
+                            combined_usage = usage or image_usage
+
+                        # Only the first generate_image tool call is executed
+                        return generated_image, image_text, combined_usage
+
+            text = self._extract_text_from_response(response)
             return None, text, usage
             
         except Exception as e:
@@ -468,11 +549,11 @@ class ChatModelGenerator(BaseModelGenerator):
             return None, None, None
     
     async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Chat model doesn't generate images, only text responses."""
+        """Chat model doesn't generate images directly; returns a text response."""
         return await self._generate_text_response(prompt)
     
     async def generate_image_from_text_and_image(self, prompt: str, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None, additional_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Chat model doesn't generate images, only text responses."""
+        """Chat model doesn't generate images directly; returns a text response."""
         # Combine all images into a list
         all_images = [input_image]
         if additional_images:
@@ -480,7 +561,7 @@ class ChatModelGenerator(BaseModelGenerator):
         return await self._generate_text_response(prompt, all_images)
     
     async def generate_image_from_image_only(self, input_image: Image.Image, streaming_callback=None, aspect_ratio: Optional[str] = None, additional_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Chat model doesn't generate images, only text responses."""
+        """Chat model doesn't generate images directly; returns a text response."""
         generic_prompt = "Please provide a text description or analysis of the provided content."
         # Combine all images into a list
         all_images = [input_image]
@@ -488,8 +569,8 @@ class ChatModelGenerator(BaseModelGenerator):
             all_images.extend(additional_images)
         return await self._generate_text_response(generic_prompt, all_images)
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
-        """Generate text-only response."""
+    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Generate a response, potentially including an image if the model calls the image generation tool."""
         return await self._generate_text_response(prompt, input_images)
 
 
