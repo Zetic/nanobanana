@@ -125,10 +125,13 @@ class GeminiModelGenerator(BaseModelGenerator):
     async def generate_image_from_text(self, prompt: str, streaming_callback=None, aspect_ratio: Optional[str] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate an image from text prompt only."""
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=[prompt],
-                config=types.GenerateContentConfig(seed=random.randint(0, 2**31 - 1)),
+            seed = random.randint(0, 2**31 - 1)
+            response = await asyncio.to_thread(
+                lambda: self.client.models.generate_content(
+                    model=self.model,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(seed=seed),
+                )
             )
             
             image = self._extract_image_from_response(response)
@@ -171,10 +174,13 @@ class GeminiModelGenerator(BaseModelGenerator):
                     )
                     contents.append(add_image_part)
             
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(seed=random.randint(0, 2**31 - 1)),
+            seed = random.randint(0, 2**31 - 1)
+            response = await asyncio.to_thread(
+                lambda: self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(seed=seed),
+                )
             )
             
             image = self._extract_image_from_response(response)
@@ -215,9 +221,11 @@ class GeminiModelGenerator(BaseModelGenerator):
             else:
                 contents = [prompt]
             
-            response = self.client.models.generate_content(
-                model=self.text_only_model,
-                contents=contents,
+            response = await asyncio.to_thread(
+                lambda: self.client.models.generate_content(
+                    model=self.text_only_model,
+                    contents=contents,
+                )
             )
             
             text = self._extract_text_from_response(response)
@@ -482,20 +490,23 @@ class ChatModelGenerator(BaseModelGenerator):
         lightweight chat-completion call so the user receives a natural reply.
         """
         try:
-            response = self.client.chat.completions.create(
-                model=self.text_only_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a helpful Discord assistant. Reply in plain text only. "
-                            "An image was just generated for the user based on their request. "
-                            "Acknowledge the image creation and briefly describe what was created "
-                            "based on the user's request, in 1-2 friendly sentences."
-                        ),
-                    },
-                    {"role": "user", "content": original_prompt},
-                ],
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful Discord assistant. Reply in plain text only. "
+                        "An image was just generated for the user based on their request. "
+                        "Acknowledge the image creation and briefly describe what was created "
+                        "based on the user's request, in 1-2 friendly sentences."
+                    ),
+                },
+                {"role": "user", "content": original_prompt},
+            ]
+            response = await asyncio.to_thread(
+                lambda: self.client.chat.completions.create(
+                    model=self.text_only_model,
+                    messages=messages,
+                )
             )
             return self._extract_text_from_response(response)
         except Exception as e:
@@ -520,23 +531,26 @@ class ChatModelGenerator(BaseModelGenerator):
             else:
                 content = prompt
 
-            response = self.client.chat.completions.create(
-                model=self.text_only_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a helpful Discord assistant. Reply in plain text only. "
-                            "Use the generate_image tool when the user requests image creation, generation, or editing."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": content
-                    }
-                ],
-                tools=[IMAGE_GENERATION_TOOL],
-                tool_choice="auto",
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful Discord assistant. Reply in plain text only. "
+                        "Use the generate_image tool when the user requests image creation, generation, or editing."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": content
+                }
+            ]
+            response = await asyncio.to_thread(
+                lambda: self.client.chat.completions.create(
+                    model=self.text_only_model,
+                    messages=messages,
+                    tools=[IMAGE_GENERATION_TOOL],
+                    tool_choice="auto",
+                )
             )
 
             usage = self._extract_usage_from_response(response)
