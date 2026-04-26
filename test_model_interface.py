@@ -137,9 +137,10 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         """When the model returns a generate_image tool call with model='gemini', GeminiModelGenerator is used."""
         tool_call = self._make_tool_call("a red apple", "gemini")
         chat_response = self._make_chat_response(tool_calls=[tool_call])
+        followup_response = self._make_chat_response(tool_calls=None, content="Here's the red apple image you asked for!")
 
         mock_chat = Mock()
-        mock_chat.completions.create.return_value = chat_response
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
         fake_image = Image.new("RGB", (1, 1))
@@ -155,16 +156,17 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
 
         mock_exec.assert_awaited_once_with("a red apple", "gemini", None)
         self.assertIs(image, fake_image)
-        self.assertEqual(text, "a red apple")
+        self.assertEqual(text, "Here's the red apple image you asked for!")
         self.assertIsNotNone(usage)
 
     async def test_tool_call_uses_gpt_model(self):
         """When the model returns a generate_image tool call with model='gpt', GPTModelGenerator is used."""
         tool_call = self._make_tool_call("a blue sky", "gpt")
         chat_response = self._make_chat_response(tool_calls=[tool_call])
+        followup_response = self._make_chat_response(tool_calls=None, content="Here's the blue sky image!")
 
         mock_chat = Mock()
-        mock_chat.completions.create.return_value = chat_response
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
         fake_image = Image.new("RGB", (1, 1))
@@ -180,6 +182,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
 
         mock_exec.assert_awaited_once_with("a blue sky", "gpt", None)
         self.assertIs(image, fake_image)
+        self.assertEqual(text, "Here's the blue sky image!")
 
     async def test_no_tool_call_returns_text_only(self):
         """When the model returns plain text (no tool call), the image is None."""
@@ -301,9 +304,10 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         """When input_images are present, _execute_image_generation_tool is called with them."""
         tool_call = self._make_tool_call("turn it green", "gemini")
         chat_response = self._make_chat_response(tool_calls=[tool_call])
+        followup_response = self._make_chat_response(tool_calls=None, content="Done!")
 
         mock_chat = Mock()
-        mock_chat.completions.create.return_value = chat_response
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
         fake_image = Image.new("RGB", (1, 1))
@@ -324,9 +328,10 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         """When the image tool fires, usage metadata contains 'image_model_used'."""
         tool_call = self._make_tool_call("a fox", "gpt")
         chat_response = self._make_chat_response(tool_calls=[tool_call])
+        followup_response = self._make_chat_response(tool_calls=None, content="Here's your fox!")
 
         mock_chat = Mock()
-        mock_chat.completions.create.return_value = chat_response
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
         fake_image = Image.new("RGB", (1, 1))
@@ -349,9 +354,10 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         chat_response = self._make_chat_response(tool_calls=[tool_call])
         # Patch usage: prompt=5, completion=2, total=7
         chat_response.usage = SimpleNamespace(prompt_tokens=5, completion_tokens=2, total_tokens=7)
+        followup_response = self._make_chat_response(tool_calls=None, content="Beautiful sunset generated!")
 
         mock_chat = Mock()
-        mock_chat.completions.create.return_value = chat_response
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
         image_usage = {"prompt_token_count": 10, "candidates_token_count": 0, "total_token_count": 10}
@@ -368,6 +374,65 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(usage["prompt_token_count"], 5 + 10)
         self.assertEqual(usage["total_token_count"], 7 + 10)
+
+    async def test_generate_image_followup_text_returns_chat_response(self):
+        """_generate_image_followup_text returns a conversational reply from the chat model."""
+        followup_response = self._make_chat_response(tool_calls=None, content="Here's your image!")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.return_value = followup_response
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            text = await generator._generate_image_followup_text("draw a sunset")
+
+        self.assertEqual(text, "Here's your image!")
+        call_kwargs = mock_chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[1]["content"], "draw a sunset")
+
+    async def test_generate_image_followup_text_returns_none_on_error(self):
+        """_generate_image_followup_text returns None when the API call fails."""
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = RuntimeError("API error")
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            text = await generator._generate_image_followup_text("draw a sunset")
+
+        self.assertIsNone(text)
+
+    async def test_tool_call_text_is_not_image_prompt(self):
+        """After image generation, the returned text is a conversational reply, not the image-model prompt."""
+        image_prompt = "A highly detailed photorealistic red apple on a white background"
+        tool_call = self._make_tool_call(image_prompt, "gemini")
+        chat_response = self._make_chat_response(tool_calls=[tool_call])
+        followup_response = self._make_chat_response(tool_calls=None, content="Here's the apple you requested!")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        fake_image = Image.new("RGB", (1, 1))
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            with patch.object(
+                generator, "_execute_image_generation_tool",
+                new=AsyncMock(return_value=(fake_image, image_prompt, {"prompt_token_count": 5, "candidates_token_count": 0, "total_token_count": 5}))
+            ):
+                image, text, usage = await generator._generate_text_response("draw me an apple")
+
+        # text must NOT be the internal image-model prompt
+        self.assertNotEqual(text, image_prompt)
+        self.assertEqual(text, "Here's the apple you requested!")
 
 
 if __name__ == "__main__":
