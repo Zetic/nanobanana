@@ -444,10 +444,21 @@ async def handle_conversation_request(message):
             return
 
         generator = get_model_generator("chat")
-        _, text_response, _ = await generator.generate_text_only_response(text_content, images if images else None)
+        generated_image, text_response, _ = await generator.generate_text_only_response(text_content, images if images else None)
 
-        if not text_response or not text_response.strip():
+        if not generated_image and (not text_response or not text_response.strip()):
             await response_message.edit(content="I couldn't generate a response. Please try again.")
+            return
+
+        if generated_image:
+            img_buffer = io.BytesIO()
+            generated_image.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"chat_{timestamp}.png"
+            file = discord.File(img_buffer, filename=filename)
+            reply_content = text_response.strip() if text_response and text_response.strip() else "Here's the generated image:"
+            await response_message.edit(content=reply_content[:1800], attachments=[file])
             return
 
         chunks = split_long_message(text_response, max_length=1800)
