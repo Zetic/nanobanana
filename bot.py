@@ -444,7 +444,22 @@ async def handle_conversation_request(message):
             return
 
         generator = get_model_generator("chat")
-        generated_image, text_response, _ = await generator.generate_text_only_response(text_content, images if images else None)
+        start_time = time.monotonic()
+        generated_image, text_response, usage_metadata = await generator.generate_text_only_response(text_content, images if images else None)
+
+        if usage_metadata and not message.author.bot:
+            prompt_tokens = usage_metadata.get("prompt_token_count", 0)
+            output_tokens = usage_metadata.get("candidates_token_count", 0)
+            total_tokens = usage_metadata.get("total_token_count", 0)
+            images_generated = 1 if generated_image else 0
+            usage_tracker.record_usage(
+                user_id=message.author.id,
+                username=message.author.display_name or message.author.name,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                images_generated=images_generated,
+            )
 
         if not generated_image and (not text_response or not text_response.strip()):
             await response_message.edit(content="I couldn't generate a response. Please try again.")
@@ -458,6 +473,11 @@ async def handle_conversation_request(message):
             filename = f"chat_{timestamp}.png"
             file = discord.File(img_buffer, filename=filename)
             reply_content = text_response.strip() if text_response and text_response.strip() else "Here's the generated image:"
+            image_model_used = usage_metadata.get("image_model_used") if usage_metadata else None
+            if image_model_used:
+                model_display = "GPT Image 2" if image_model_used == "gpt" else "Gemini"
+                elapsed = time.monotonic() - start_time
+                reply_content += f"\n-# *Used {model_display} in {format_elapsed_time(elapsed)}*"
             await response_message.edit(content=reply_content[:1800], attachments=[file])
             return
 

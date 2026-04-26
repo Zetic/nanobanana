@@ -459,10 +459,18 @@ class ChatModelGenerator(BaseModelGenerator):
                 "total_token_count": 0,
             }
 
-    async def _execute_image_generation_tool(self, prompt: str, model: str) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
-        """Execute the image generation tool using the specified model ('gemini' or 'gpt')."""
+    async def _execute_image_generation_tool(self, prompt: str, model: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+        """Execute the image generation tool using the specified model ('gemini' or 'gpt').
+
+        When *input_images* are provided they are forwarded to the image generator so the
+        model can edit/transform the supplied images rather than creating from scratch.
+        """
         try:
             generator = get_model_generator(model)
+            if input_images:
+                if len(input_images) == 1:
+                    return await generator.generate_image_from_text_and_image(prompt, input_images[0])
+                return await generator.generate_image_from_text_and_image(prompt, input_images[0], additional_images=input_images[1:])
             return await generator.generate_image_from_text(prompt)
         except Exception as e:
             logger.error(f"Error executing image generation tool (model={model}): {e}")
@@ -493,7 +501,7 @@ class ChatModelGenerator(BaseModelGenerator):
                         "role": "system",
                         "content": (
                             "You are a helpful Discord assistant. Reply in plain text only. "
-                            "Use the generate_image tool when the user requests image creation or generation."
+                            "Use the generate_image tool when the user requests image creation, generation, or editing."
                         ),
                     },
                     {
@@ -525,7 +533,7 @@ class ChatModelGenerator(BaseModelGenerator):
                             image_model = "gemini"
 
                         generated_image, image_text, image_usage = await self._execute_image_generation_tool(
-                            image_prompt, image_model
+                            image_prompt, image_model, input_images
                         )
 
                         # Merge usage from both the chat call and the image generation call
@@ -537,6 +545,11 @@ class ChatModelGenerator(BaseModelGenerator):
                             }
                         else:
                             combined_usage = usage or image_usage
+                            if combined_usage is None:
+                                logger.warning("Both chat and image usage metadata are None; defaulting to empty usage dict")
+                                combined_usage = {}
+
+                        combined_usage["image_model_used"] = image_model
 
                         # Only the first generate_image tool call is executed
                         return generated_image, image_text, combined_usage

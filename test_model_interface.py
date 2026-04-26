@@ -153,7 +153,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
             ) as mock_exec:
                 image, text, usage = await generator._generate_text_response("draw a red apple")
 
-        mock_exec.assert_awaited_once_with("a red apple", "gemini")
+        mock_exec.assert_awaited_once_with("a red apple", "gemini", None)
         self.assertIs(image, fake_image)
         self.assertEqual(text, "a red apple")
         self.assertIsNotNone(usage)
@@ -178,7 +178,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
             ) as mock_exec:
                 image, text, usage = await generator._generate_text_response("draw a blue sky")
 
-        mock_exec.assert_awaited_once_with("a blue sky", "gpt")
+        mock_exec.assert_awaited_once_with("a blue sky", "gpt", None)
         self.assertIs(image, fake_image)
 
     async def test_no_tool_call_returns_text_only(self):
@@ -224,7 +224,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertIn("gpt", params["model"]["enum"])
 
     async def test_execute_image_generation_tool_gemini(self):
-        """_execute_image_generation_tool delegates to GeminiModelGenerator for model='gemini'."""
+        """_execute_image_generation_tool without images delegates to generate_image_from_text."""
         fake_image = Image.new("RGB", (2, 2))
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
@@ -243,7 +243,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text, "cat")
 
     async def test_execute_image_generation_tool_gpt(self):
-        """_execute_image_generation_tool delegates to GPTModelGenerator for model='gpt'."""
+        """_execute_image_generation_tool without images delegates to generate_image_from_text."""
         fake_image = Image.new("RGB", (2, 2))
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
@@ -259,6 +259,89 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         mock_factory.assert_called_once_with("gpt")
         mock_gpt.generate_image_from_text.assert_awaited_once_with("a dog")
         self.assertIs(image, fake_image)
+
+    async def test_execute_image_generation_tool_with_single_image(self):
+        """_execute_image_generation_tool with one image calls generate_image_from_text_and_image."""
+        fake_image = Image.new("RGB", (2, 2))
+        input_image = Image.new("RGB", (3, 3), color="red")
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=SimpleNamespace(chat=Mock())):
+            generator = model_interface.ChatModelGenerator()
+
+        mock_gen = SimpleNamespace(
+            generate_image_from_text_and_image=AsyncMock(return_value=(fake_image, "edited", {"total_token_count": 6}))
+        )
+        with patch.object(model_interface, "get_model_generator", return_value=mock_gen):
+            image, text, usage = await generator._execute_image_generation_tool("make it green", "gemini", [input_image])
+
+        mock_gen.generate_image_from_text_and_image.assert_awaited_once_with("make it green", input_image)
+        self.assertIs(image, fake_image)
+
+    async def test_execute_image_generation_tool_with_multiple_images(self):
+        """_execute_image_generation_tool with multiple images passes extras as additional_images."""
+        fake_image = Image.new("RGB", (2, 2))
+        img1 = Image.new("RGB", (3, 3), color="red")
+        img2 = Image.new("RGB", (3, 3), color="blue")
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=SimpleNamespace(chat=Mock())):
+            generator = model_interface.ChatModelGenerator()
+
+        mock_gen = SimpleNamespace(
+            generate_image_from_text_and_image=AsyncMock(return_value=(fake_image, "merged", {"total_token_count": 8}))
+        )
+        with patch.object(model_interface, "get_model_generator", return_value=mock_gen):
+            image, text, usage = await generator._execute_image_generation_tool("combine", "gpt", [img1, img2])
+
+        mock_gen.generate_image_from_text_and_image.assert_awaited_once_with("combine", img1, additional_images=[img2])
+        self.assertIs(image, fake_image)
+
+    async def test_tool_call_passes_images_to_execute(self):
+        """When input_images are present, _execute_image_generation_tool is called with them."""
+        tool_call = self._make_tool_call("turn it green", "gemini")
+        chat_response = self._make_chat_response(tool_calls=[tool_call])
+
+        mock_chat = Mock()
+        mock_chat.completions.create.return_value = chat_response
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        fake_image = Image.new("RGB", (1, 1))
+        input_image = Image.new("RGB", (4, 4), color="red")
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            with patch.object(
+                generator, "_execute_image_generation_tool",
+                new=AsyncMock(return_value=(fake_image, "done", {"prompt_token_count": 1, "candidates_token_count": 0, "total_token_count": 1}))
+            ) as mock_exec:
+                await generator._generate_text_response("turn it green", [input_image])
+
+        mock_exec.assert_awaited_once_with("turn it green", "gemini", [input_image])
+
+    async def test_image_model_used_recorded_in_usage(self):
+        """When the image tool fires, usage metadata contains 'image_model_used'."""
+        tool_call = self._make_tool_call("a fox", "gpt")
+        chat_response = self._make_chat_response(tool_calls=[tool_call])
+
+        mock_chat = Mock()
+        mock_chat.completions.create.return_value = chat_response
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        fake_image = Image.new("RGB", (1, 1))
+        image_usage = {"prompt_token_count": 2, "candidates_token_count": 0, "total_token_count": 2}
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            with patch.object(
+                generator, "_execute_image_generation_tool",
+                new=AsyncMock(return_value=(fake_image, "fox", image_usage))
+            ):
+                _, _, usage = await generator._generate_text_response("draw a fox")
+
+        self.assertEqual(usage.get("image_model_used"), "gpt")
 
     async def test_usage_is_combined_on_tool_call(self):
         """Usage metadata from both the chat call and the image generation are summed."""
