@@ -404,7 +404,6 @@ async def handle_conversation_request(message):
     """Handle text-only conversational responses for mentions/replies."""
     try:
         response_message = await message.reply("Thinking...")
-        start_time = time.monotonic()
         text_content = await extract_text_from_message(message)
 
         # Collect images from the current message's attachments
@@ -445,6 +444,7 @@ async def handle_conversation_request(message):
             return
 
         generator = get_model_generator("chat")
+        start_time = time.monotonic()
         generated_image, text_response, usage_metadata = await generator.generate_text_only_response(text_content, images if images else None)
 
         if usage_metadata and not message.author.bot:

@@ -544,7 +544,10 @@ class ChatModelGenerator(BaseModelGenerator):
                                 "total_token_count": usage.get("total_token_count", 0) + image_usage.get("total_token_count", 0),
                             }
                         else:
-                            combined_usage = usage or image_usage or {}
+                            combined_usage = usage or image_usage
+                            if combined_usage is None:
+                                logger.warning("Both chat and image usage metadata are None; defaulting to empty usage dict")
+                                combined_usage = {}
 
                         combined_usage["image_model_used"] = image_model
 
