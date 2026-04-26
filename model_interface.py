@@ -401,8 +401,7 @@ IMAGE_GENERATION_TOOL = {
                     "enum": ["gemini", "gpt"],
                     "description": (
                         "The AI model to use for image generation. "
-                        "Use 'gemini' for creative or artistic images; "
-                        "use 'gpt' for photorealistic or detailed images."
+                        "Always default to 'gemini' unless the user explicitly requests GPT or OpenAI."
                     ),
                 },
             },
@@ -475,6 +474,33 @@ class ChatModelGenerator(BaseModelGenerator):
         except Exception as e:
             logger.error(f"Error executing image generation tool (model={model}): {e}")
             return None, None, None
+
+    async def _generate_image_followup_text(self, original_prompt: str) -> Optional[str]:
+        """Generate a brief conversational response after an image has been generated.
+
+        Rather than surfacing the internal image-model prompt, this makes a second
+        lightweight chat-completion call so the user receives a natural reply.
+        """
+        try:
+            response = self.client.chat.completions.create(
+                model=self.text_only_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a helpful Discord assistant. Reply in plain text only. "
+                            "An image was just generated for the user based on their request. "
+                            "Acknowledge the image creation and briefly describe what was created "
+                            "based on the user's request, in 1-2 friendly sentences."
+                        ),
+                    },
+                    {"role": "user", "content": original_prompt},
+                ],
+            )
+            return self._extract_text_from_response(response)
+        except Exception as e:
+            logger.error(f"Error generating follow-up text after image generation: {e}")
+            return None
 
     async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response using OpenAI GPT-5.4 mini with image generation tool support."""
@@ -551,8 +577,12 @@ class ChatModelGenerator(BaseModelGenerator):
 
                         combined_usage["image_model_used"] = image_model
 
+                        # Generate a proper conversational response rather than surfacing
+                        # the internal image-model prompt as the text reply.
+                        conversational_text = await self._generate_image_followup_text(prompt)
+
                         # Only the first generate_image tool call is executed
-                        return generated_image, image_text, combined_usage
+                        return generated_image, conversational_text, combined_usage
 
             text = self._extract_text_from_response(response)
             return None, text, usage
