@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
@@ -1455,10 +1456,9 @@ async def wordplay_slash(
         img1_buffer.seek(0)
         img2_buffer.seek(0)
         
-        # Save images to disk
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename1 = f"wordplay_{shorter_word}_{timestamp}_1.png"
-        filename2 = f"wordplay_{longer_word}_{timestamp}_2.png"
+        # Save images to disk with randomized filenames to avoid revealing the words
+        filename1 = f"wordplay_{uuid.uuid4().hex}.png"
+        filename2 = f"wordplay_{uuid.uuid4().hex}.png"
         
         filepath1 = os.path.join(config.GENERATED_IMAGES_DIR, filename1)
         filepath2 = os.path.join(config.GENERATED_IMAGES_DIR, filename2)
