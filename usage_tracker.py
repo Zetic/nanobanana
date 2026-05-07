@@ -22,6 +22,7 @@ class UsageTracker:
     
     def __init__(self):
         self.usage_file = os.path.join(config.GENERATED_IMAGES_DIR, 'usage_stats.json')
+        self.usage_log_file = os.path.join(config.LOGS_DIR, 'usage.log')
         self._lock = threading.Lock()
         self._ensure_usage_file_exists()
         self.rate_limit_hours = 8  # Each usage charge expires after 8 hours
@@ -151,10 +152,50 @@ class UsageTracker:
         data["last_updated"] = datetime.now().isoformat()
         with open(self.usage_file, 'w') as f:
             json.dump(data, f, indent=2)
-    
-    def record_usage(self, user_id: int, username: str, prompt_tokens: int, 
+
+    def _append_usage_log(self, user_id: int, username: str, used_count: int,
+                          tier_limit, channel_id: Optional[int],
+                          channel_name: Optional[str]):
+        """Append a single usage entry to the persistent usage log file.
+
+        Args:
+            user_id: Discord user ID
+            username: Discord username
+            used_count: Number of active usage charges after this request (ignored for unlimited)
+            tier_limit: The user's tier limit (may be float('inf') for unlimited)
+            channel_id: Discord channel ID, or None
+            channel_name: Discord channel name, or None
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        if tier_limit == float('inf'):
+            usage_str = "unlimited"
+        else:
+            remaining = max(0, int(tier_limit) - used_count)
+            usage_str = f"{remaining}/{int(tier_limit)}"
+
+        if channel_name:
+            channel_str = f"#{channel_name}" + (f" ({channel_id})" if channel_id else "")
+        elif channel_id:
+            channel_str = str(channel_id)
+        else:
+            channel_str = "unknown"
+
+        line = (
+            f"{timestamp} | user={username} ({user_id}) | "
+            f"usage={usage_str} | channel={channel_str}"
+        )
+        try:
+            os.makedirs(os.path.dirname(self.usage_log_file), exist_ok=True)
+            with open(self.usage_log_file, 'a', encoding='utf-8') as f:
+                f.write(line + '\n')
+        except Exception as e:
+            logger.warning(f"Could not write to usage log: {e}")
+
+    def record_usage(self, user_id: int, username: str, prompt_tokens: int,
                     output_tokens: int, total_tokens: int, images_generated: int = 0,
-                    consume_reserved_slots: int = 0):
+                    consume_reserved_slots: int = 0, channel_id: Optional[int] = None,
+                    channel_name: Optional[str] = None):
         """
         Record token usage for a user.
         
@@ -165,6 +206,9 @@ class UsageTracker:
             output_tokens: Number of output tokens generated
             total_tokens: Total tokens used
             images_generated: Number of images generated (default 0)
+            consume_reserved_slots: Number of pre-reserved slots to consume
+            channel_id: Discord channel ID where the command was used (optional)
+            channel_name: Discord channel name where the command was used (optional)
         """
         with self._lock:
             data = self._load_usage_data()
@@ -223,6 +267,24 @@ class UsageTracker:
             logger.info(f"Recorded usage for user {username} ({user_id}): "
                        f"prompt={prompt_tokens}, output={output_tokens}, "
                        f"total={total_tokens}, images={images_generated}")
+
+            # Write a persistent log entry for each usage charge consumed
+            if images_generated > 0:
+                user_tier = self._get_user_tier_unlocked(user_id, data)
+                if user_id in config.ELEVATED_USERS or user_tier == 'unlimited':
+                    tier_limit = float('inf')
+                    active_count = 0
+                else:
+                    tier_limit = TIER_LIMITS.get(user_tier, config.DAILY_IMAGE_LIMIT)
+                    now_cutoff = datetime.now() - timedelta(hours=self.rate_limit_hours)
+                    active_count = sum(
+                        1 for ts in user_data.get("usage_timestamps", [])
+                        if datetime.fromisoformat(ts) > now_cutoff
+                    )
+                self._append_usage_log(
+                    user_id, username, active_count, tier_limit,
+                    channel_id, channel_name
+                )
 
     def reserve_usage_slots(self, user_id: int, slots: int = 1, username: Optional[str] = None) -> Tuple[bool, Optional[datetime]]:
         """
