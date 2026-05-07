@@ -2,7 +2,7 @@ import json
 import os
 import logging
 import threading
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 from datetime import datetime, date, time, timedelta
 import config
 
@@ -154,7 +154,7 @@ class UsageTracker:
             json.dump(data, f, indent=2)
 
     def _append_usage_log(self, user_id: int, username: str, used_count: int,
-                          tier_limit, channel_id: Optional[int],
+                          tier_limit: Union[int, float], channel_id: Optional[int],
                           channel_name: Optional[str]):
         """Append a single usage entry to the persistent usage log file.
 
@@ -186,7 +186,6 @@ class UsageTracker:
             f"usage={usage_str} | channel={channel_str}"
         )
         try:
-            os.makedirs(os.path.dirname(self.usage_log_file), exist_ok=True)
             with open(self.usage_log_file, 'a', encoding='utf-8') as f:
                 f.write(line + '\n')
         except Exception as e:
