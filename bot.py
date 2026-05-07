@@ -459,6 +459,8 @@ async def handle_conversation_request(message):
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 images_generated=images_generated,
+                channel_id=message.channel.id,
+                channel_name=getattr(message.channel, 'name', None),
             )
 
         if not generated_image and (not text_response or not text_response.strip()):
@@ -647,7 +649,9 @@ async def run_image_command(
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 images_generated=images_generated,
-                consume_reserved_slots=images_generated
+                consume_reserved_slots=images_generated,
+                channel_id=interaction.channel_id,
+                channel_name=getattr(interaction.channel, 'name', None),
             )
             usage_consumed = images_generated > 0
         
@@ -1136,7 +1140,9 @@ async def avatar_slash(interaction: discord.Interaction, template: app_commands.
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
                     images_generated=images_generated,
-                    consume_reserved_slots=images_generated
+                    consume_reserved_slots=images_generated,
+                    channel_id=interaction.channel_id,
+                    channel_name=getattr(interaction.channel, 'name', None),
                 )
                 usage_consumed = images_generated > 0
             except Exception as e:
@@ -1475,7 +1481,9 @@ async def wordplay_slash(
             output_tokens=0,
             total_tokens=0,
             images_generated=2,  # Two images generated per puzzle
-            consume_reserved_slots=2
+            consume_reserved_slots=2,
+            channel_id=interaction.channel_id,
+            channel_name=getattr(interaction.channel, 'name', None),
         )
         usage_consumed = True
         
