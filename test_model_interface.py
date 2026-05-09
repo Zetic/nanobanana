@@ -408,6 +408,48 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(text)
 
+    async def test_system_prompt_is_encouraging(self):
+        """The system prompt must include positive, encouraging guidance and forbid harsh remarks."""
+        chat_response = self._make_chat_response(tool_calls=None, content="You're doing great!")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.return_value = chat_response
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            await generator._generate_text_response("review my code")
+
+        call_kwargs = mock_chat.completions.create.call_args.kwargs
+        system_message = call_kwargs["messages"][0]
+        self.assertEqual(system_message["role"], "system")
+        system_content = system_message["content"]
+        self.assertIn("encouraging", system_content)
+        self.assertIn("supportive", system_content)
+        self.assertIn("constructive", system_content)
+        self.assertIn("Never make discouraging remarks", system_content)
+        self.assertNotIn("disappoints", system_content)
+        self.assertNotIn("reconsider your career", system_content.lower())
+
+    async def test_followup_system_prompt_is_encouraging(self):
+        """The follow-up image system prompt must also use encouraging language."""
+        followup_response = self._make_chat_response(tool_calls=None, content="Looks amazing!")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.return_value = followup_response
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            await generator._generate_image_followup_text("draw a sunset")
+
+        call_kwargs = mock_chat.completions.create.call_args.kwargs
+        system_message = call_kwargs["messages"][0]
+        self.assertEqual(system_message["role"], "system")
+        self.assertIn("encouraging", system_message["content"])
+
     async def test_tool_call_text_is_not_image_prompt(self):
         """After image generation, the returned text is a conversational reply, not the image-model prompt."""
         image_prompt = "A highly detailed photorealistic red apple on a white background"

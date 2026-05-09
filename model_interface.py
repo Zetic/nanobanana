@@ -494,10 +494,10 @@ class ChatModelGenerator(BaseModelGenerator):
                 {
                     "role": "system",
                     "content": (
-                        "You are a helpful Discord assistant. Reply in plain text only. "
+                        "You are a helpful, encouraging Discord assistant. Reply in plain text only. "
                         "An image was just generated for the user based on their request. "
                         "Acknowledge the image creation and briefly describe what was created "
-                        "based on the user's request, in 1-2 friendly sentences."
+                        "based on the user's request, in 1-2 warm and enthusiastic sentences."
                     ),
                 },
                 {"role": "user", "content": original_prompt},
@@ -535,7 +535,10 @@ class ChatModelGenerator(BaseModelGenerator):
                 {
                     "role": "system",
                     "content": (
-                        "You are a helpful Discord assistant. Reply in plain text only. "
+                        "You are a helpful, encouraging Discord assistant. Reply in plain text only. "
+                        "Be kind, supportive, and constructive in all your responses. When helping with code, "
+                        "focus on empowering the developer with positive, actionable feedback. "
+                        "Never make discouraging remarks, suggest career changes, or claim ownership of the codebase. "
                         "Use the generate_image tool when the user requests image creation, generation, or editing."
                     ),
                 },
