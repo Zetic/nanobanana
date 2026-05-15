@@ -16,6 +16,7 @@ from google.genai import types
 from openai import OpenAI
 from typing import Optional, List, Tuple, Dict, Any, Union, Callable, Awaitable
 import config
+from image_utils import download_image
 
 logger = logging.getLogger(__name__)
 
@@ -590,6 +591,10 @@ class ChatModelGenerator(BaseModelGenerator):
                 " When the user asks about Discord users or server membership, use the available Discord tools "
                 "to look up the real data instead of guessing or hallucinating."
             )
+            prompt += (
+                " If the user wants you to edit or transform a mentioned user's avatar, first call "
+                "get_discord_user_avatar and then use generate_image so the fetched avatar can be used as an input image."
+            )
         return prompt
 
     def _serialize_tool_call(self, tool_call: Any, fallback_index: int) -> Dict[str, Any]:
@@ -608,10 +613,11 @@ class ChatModelGenerator(BaseModelGenerator):
         self,
         tool_calls: List[Any],
         tool_executor: Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]],
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Execute supported non-image tool calls and return assistant/tool follow-up messages."""
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+        """Execute supported non-image tool calls and return assistant/tool follow-up messages plus image URLs."""
         serialized_calls: List[Dict[str, Any]] = []
         tool_messages: List[Dict[str, Any]] = []
+        discovered_image_urls: List[str] = []
 
         for index, tool_call in enumerate(tool_calls):
             tool_name = getattr(tool_call.function, "name", "")
@@ -627,6 +633,9 @@ class ChatModelGenerator(BaseModelGenerator):
                 args = {}
 
             result = await tool_executor(tool_name, args)
+            avatar_url = result.get("avatar_url") or ((result.get("user") or {}).get("avatar_url"))
+            if avatar_url:
+                discovered_image_urls.append(avatar_url)
             tool_messages.append(
                 {
                     "role": "tool",
@@ -635,7 +644,20 @@ class ChatModelGenerator(BaseModelGenerator):
                 }
             )
 
-        return serialized_calls, tool_messages
+        return serialized_calls, tool_messages, discovered_image_urls
+
+    async def _download_tool_result_images(self, image_urls: List[str]) -> List[Image.Image]:
+        """Download unique tool-result image URLs for reuse in image-generation tool calls."""
+        images: List[Image.Image] = []
+        seen_urls = set()
+        for image_url in image_urls:
+            if not image_url or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            image = await download_image(image_url)
+            if image:
+                images.append(image)
+        return images
 
     async def _execute_image_generation_tool(self, prompt: str, model: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Execute the image generation tool using the specified model ('gemini' or 'gpt').
@@ -718,6 +740,7 @@ class ChatModelGenerator(BaseModelGenerator):
                 "total_token_count": 0,
             }
             tools = self._build_available_tools(tool_executor)
+            tool_result_image_urls: List[str] = []
 
             for round_number in range(1, MAX_CHAT_TOOL_CALL_ROUNDS + 1):
                 response = await asyncio.to_thread(
@@ -751,8 +774,13 @@ class ChatModelGenerator(BaseModelGenerator):
                             logger.warning("generate_image tool call missing 'model'; defaulting to 'gemini'")
                             image_model = "gemini"
 
+                        tool_images = await self._download_tool_result_images(tool_result_image_urls)
+                        generation_input_images = list(input_images or [])
+                        generation_input_images.extend(tool_images)
+                        generation_input_images = generation_input_images or None
+
                         generated_image, image_text, image_usage = await self._execute_image_generation_tool(
-                            image_prompt, image_model, input_images
+                            image_prompt, image_model, generation_input_images
                         )
 
                         combined_usage = self._accumulate_usage_metadata(combined_usage, image_usage)
@@ -765,10 +793,11 @@ class ChatModelGenerator(BaseModelGenerator):
                     text = self._extract_text_from_response(response)
                     return None, text, combined_usage
 
-                serialized_calls, tool_messages = await self._execute_non_image_tool_calls(tool_calls, tool_executor)
+                serialized_calls, tool_messages, discovered_image_urls = await self._execute_non_image_tool_calls(tool_calls, tool_executor)
                 if not serialized_calls:
                     text = self._extract_text_from_response(response)
                     return None, text, combined_usage
+                tool_result_image_urls.extend(discovered_image_urls)
 
                 messages.append(
                     {

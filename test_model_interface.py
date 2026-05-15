@@ -358,6 +358,54 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(usage["total_token_count"], 28)
         mock_warning.assert_called()
 
+    async def test_avatar_tool_result_can_feed_image_generation(self):
+        """Avatar lookup results can be reused as input images for a later generate_image tool call."""
+        avatar_tool_call = SimpleNamespace(
+            id="call_avatar",
+            function=SimpleNamespace(
+                name="get_discord_user_avatar",
+                arguments=json.dumps({"user_id": "<@123>"}),
+            ),
+        )
+        image_tool_call = self._make_tool_call("make this avatar spooky", "gemini")
+        first_response = self._make_chat_response(tool_calls=[avatar_tool_call], content=None)
+        second_response = self._make_chat_response(tool_calls=[image_tool_call], content=None)
+        followup_response = self._make_chat_response(tool_calls=None, content="Done!")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = [first_response, second_response, followup_response]
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        fake_downloaded_avatar = Image.new("RGB", (4, 4), color="purple")
+        fake_generated_image = Image.new("RGB", (1, 1), color="black")
+
+        async def avatar_tool_executor(tool_name, args):
+            self.assertEqual(tool_name, "get_discord_user_avatar")
+            return {
+                "ok": True,
+                "avatar_url": "https://cdn.example.com/avatar.png",
+                "user": {"id": "123", "avatar_url": "https://cdn.example.com/avatar.png"},
+            }
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client), \
+             patch.object(model_interface, "download_image", AsyncMock(return_value=fake_downloaded_avatar)):
+            generator = model_interface.ChatModelGenerator()
+            with patch.object(
+                generator,
+                "_execute_image_generation_tool",
+                new=AsyncMock(return_value=(fake_generated_image, "done", {"prompt_token_count": 1, "candidates_token_count": 0, "total_token_count": 1}))
+            ) as mock_exec:
+                image, text, usage = await generator._generate_text_response(
+                    "make <@123>'s avatar spooky",
+                    tool_executor=avatar_tool_executor,
+                )
+
+        self.assertIs(image, fake_generated_image)
+        self.assertEqual(text, "Done!")
+        self.assertEqual(usage["image_model_used"], "gemini")
+        mock_exec.assert_awaited_once_with("make this avatar spooky", "gemini", [fake_downloaded_avatar])
+
     async def test_execute_image_generation_tool_gemini(self):
         """_execute_image_generation_tool without images delegates to generate_image_from_text."""
         fake_image = Image.new("RGB", (2, 2))
