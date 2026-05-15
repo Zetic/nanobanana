@@ -14,8 +14,9 @@ from PIL import Image
 from google import genai
 from google.genai import types
 from openai import OpenAI
-from typing import Optional, List, Tuple, Dict, Any, Union
+from typing import Optional, List, Tuple, Dict, Any, Union, Callable, Awaitable
 import config
+from image_utils import download_image
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class BaseModelGenerator(ABC):
         pass
         
     @abstractmethod
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response. Returns (image_or_none, text_response, usage_metadata). The image is non-None only when the implementation supports tool-based image generation."""
         pass
 
@@ -202,7 +203,7 @@ class GeminiModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image from image only: {e}")
             return None, None, None
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users."""
         try:
             # For text-only responses with images, include the images so the model can analyze them
@@ -366,7 +367,7 @@ class GPTModelGenerator(BaseModelGenerator):
             all_images.extend(additional_images)
         return await self._generate_image_with_input_images(generic_prompt, all_images, streaming_callback)
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response. GPT Image API doesn't support text-only, so return a simple response."""
         try:
             # Since this is the image model, we can't generate text-only responses
@@ -418,6 +419,91 @@ IMAGE_GENERATION_TOOL = {
     },
 }
 
+DISCORD_GET_USER_AVATAR_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_discord_user_avatar",
+        "description": (
+            "Get a Discord user's avatar URL from a provided snowflake ID or mention. "
+            "Use this instead of guessing what a user's avatar looks like."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "Discord user snowflake ID or mention such as <@1234567890>.",
+                },
+            },
+            "required": ["user_id"],
+        },
+    },
+}
+
+DISCORD_SEARCH_USERS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_discord_users",
+        "description": (
+            "Search users in the current Discord server by username, display name, global name, "
+            "nickname, or user ID."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query to match against users in the current server.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+DISCORD_LIST_USERS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "list_discord_users",
+        "description": "List all users in the current Discord server.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+}
+
+DISCORD_GET_USER_INFO_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_discord_user_info",
+        "description": (
+            "Get structured information about a Discord user from a provided snowflake ID or mention. "
+            "Use this instead of guessing personal details."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "Discord user snowflake ID or mention such as <@1234567890>.",
+                },
+            },
+            "required": ["user_id"],
+        },
+    },
+}
+
+DISCORD_TOOLS = [
+    DISCORD_GET_USER_AVATAR_TOOL,
+    DISCORD_SEARCH_USERS_TOOL,
+    DISCORD_LIST_USERS_TOOL,
+    DISCORD_GET_USER_INFO_TOOL,
+]
+
+DISCORD_TOOL_NAMES = {tool["function"]["name"] for tool in DISCORD_TOOLS}
+MAX_CHAT_TOOL_CALL_ROUNDS = 4
+
 
 class ChatModelGenerator(BaseModelGenerator):
     """Handles text chat responses using OpenAI GPT-5.4 mini, with image generation tool support."""
@@ -466,6 +552,113 @@ class ChatModelGenerator(BaseModelGenerator):
                 "total_token_count": 0,
             }
 
+    def _accumulate_usage_metadata(self, *usage_items: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge usage metadata objects by summing standard token counters.
+
+        Known token counters are summed across calls. Any extra metadata keys are copied
+        through, with later values overwriting earlier ones.
+        """
+        merged = {
+            "prompt_token_count": 0,
+            "candidates_token_count": 0,
+            "total_token_count": 0,
+        }
+        for usage in usage_items:
+            if not usage:
+                continue
+            for key in ("prompt_token_count", "candidates_token_count", "total_token_count"):
+                merged[key] += usage.get(key, 0) or 0
+            for key, value in usage.items():
+                if key not in merged:
+                    merged[key] = value
+        return merged
+
+    def _build_available_tools(self, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> List[Dict[str, Any]]:
+        """Return the tools that should be exposed to the chat model."""
+        tools = [IMAGE_GENERATION_TOOL]
+        if tool_executor:
+            tools.extend(DISCORD_TOOLS)
+        return tools
+
+    def _build_system_prompt(self, discord_tools_available: bool = False) -> str:
+        """Build the system prompt for conversational responses."""
+        prompt = (
+            "You are a helpful Discord assistant. Reply in plain text only. "
+            "Use the generate_image tool when the user requests image creation, generation, or editing."
+        )
+        if discord_tools_available:
+            prompt += (
+                " When the user asks about Discord users or server membership, use the available Discord tools "
+                "to look up the real data instead of guessing or hallucinating."
+            )
+            prompt += (
+                " If the user wants you to edit or transform a mentioned user's avatar, first call "
+                "get_discord_user_avatar and then use generate_image so the fetched avatar can be used as an input image."
+            )
+        return prompt
+
+    def _serialize_tool_call(self, tool_call: Any, fallback_index: int) -> Dict[str, Any]:
+        """Convert an SDK tool_call object into a chat-completions message payload."""
+        tool_call_id = getattr(tool_call, "id", None) or f"tool_call_{fallback_index}"
+        return {
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": tool_call.function.name,
+                "arguments": tool_call.function.arguments,
+            },
+        }
+
+    async def _execute_non_image_tool_calls(
+        self,
+        tool_calls: List[Any],
+        tool_executor: Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+        """Execute supported non-image tool calls and return assistant/tool follow-up messages plus image URLs."""
+        serialized_calls: List[Dict[str, Any]] = []
+        tool_messages: List[Dict[str, Any]] = []
+        discovered_image_urls: List[str] = []
+
+        for index, tool_call in enumerate(tool_calls):
+            tool_name = getattr(tool_call.function, "name", "")
+            if tool_name not in DISCORD_TOOL_NAMES:
+                continue
+
+            serialized_call = self._serialize_tool_call(tool_call, index)
+            serialized_calls.append(serialized_call)
+
+            try:
+                args = json.loads(tool_call.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+
+            result = await tool_executor(tool_name, args)
+            avatar_url = result.get("avatar_url") or ((result.get("user") or {}).get("avatar_url"))
+            if avatar_url:
+                discovered_image_urls.append(avatar_url)
+            tool_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": serialized_call["id"],
+                    "content": json.dumps(result),
+                }
+            )
+
+        return serialized_calls, tool_messages, discovered_image_urls
+
+    async def _download_tool_result_images(self, image_urls: List[str]) -> List[Image.Image]:
+        """Download unique tool-result image URLs for reuse in image-generation tool calls."""
+        images: List[Image.Image] = []
+        seen_urls = set()
+        for image_url in image_urls:
+            if not image_url or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            image = await download_image(image_url)
+            if image:
+                images.append(image)
+        return images
+
     async def _execute_image_generation_tool(self, prompt: str, model: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Execute the image generation tool using the specified model ('gemini' or 'gpt').
 
@@ -513,7 +706,7 @@ class ChatModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating follow-up text after image generation: {e}")
             return None
 
-    async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response using OpenAI GPT-5.4 mini with image generation tool support."""
         try:
             if input_images:
@@ -534,31 +727,40 @@ class ChatModelGenerator(BaseModelGenerator):
             messages = [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a helpful Discord assistant. Reply in plain text only. "
-                        "Use the generate_image tool when the user requests image creation, generation, or editing."
-                    ),
+                    "content": self._build_system_prompt(discord_tools_available=tool_executor is not None),
                 },
                 {
                     "role": "user",
                     "content": content
                 }
             ]
-            response = await asyncio.to_thread(
-                lambda: self.client.chat.completions.create(
-                    model=self.text_only_model,
-                    messages=messages,
-                    tools=[IMAGE_GENERATION_TOOL],
-                    tool_choice="auto",
+            combined_usage: Dict[str, Any] = {
+                "prompt_token_count": 0,
+                "candidates_token_count": 0,
+                "total_token_count": 0,
+            }
+            tools = self._build_available_tools(tool_executor)
+            tool_result_image_urls: List[str] = []
+
+            for round_number in range(1, MAX_CHAT_TOOL_CALL_ROUNDS + 1):
+                response = await asyncio.to_thread(
+                    lambda: self.client.chat.completions.create(
+                        model=self.text_only_model,
+                        messages=messages,
+                        tools=tools,
+                        tool_choice="auto",
+                    )
                 )
-            )
 
-            usage = self._extract_usage_from_response(response)
+                combined_usage = self._accumulate_usage_metadata(combined_usage, self._extract_usage_from_response(response))
 
-            # Check whether the model decided to call the image generation tool
-            message = response.choices[0].message if response.choices else None
-            if message and getattr(message, "tool_calls", None):
-                for tool_call in message.tool_calls:
+                message = response.choices[0].message if response.choices else None
+                tool_calls = list(getattr(message, "tool_calls", None) or [])
+                if not tool_calls:
+                    text = self._extract_text_from_response(response)
+                    return None, text, combined_usage
+
+                for tool_call in tool_calls:
                     if tool_call.function.name == "generate_image":
                         args = json.loads(tool_call.function.arguments)
 
@@ -572,34 +774,50 @@ class ChatModelGenerator(BaseModelGenerator):
                             logger.warning("generate_image tool call missing 'model'; defaulting to 'gemini'")
                             image_model = "gemini"
 
+                        tool_images = await self._download_tool_result_images(tool_result_image_urls)
+                        generation_input_images = list(input_images or [])
+                        generation_input_images.extend(tool_images)
+                        generation_input_images = generation_input_images or None
+
                         generated_image, image_text, image_usage = await self._execute_image_generation_tool(
-                            image_prompt, image_model, input_images
+                            image_prompt, image_model, generation_input_images
                         )
 
-                        # Merge usage from both the chat call and the image generation call
-                        if image_usage and usage:
-                            combined_usage = {
-                                "prompt_token_count": usage.get("prompt_token_count", 0) + image_usage.get("prompt_token_count", 0),
-                                "candidates_token_count": usage.get("candidates_token_count", 0) + image_usage.get("candidates_token_count", 0),
-                                "total_token_count": usage.get("total_token_count", 0) + image_usage.get("total_token_count", 0),
-                            }
-                        else:
-                            combined_usage = usage or image_usage
-                            if combined_usage is None:
-                                logger.warning("Both chat and image usage metadata are None; defaulting to empty usage dict")
-                                combined_usage = {}
-
+                        combined_usage = self._accumulate_usage_metadata(combined_usage, image_usage)
                         combined_usage["image_model_used"] = image_model
 
-                        # Generate a proper conversational response rather than surfacing
-                        # the internal image-model prompt as the text reply.
                         conversational_text = await self._generate_image_followup_text(prompt)
-
-                        # Only the first generate_image tool call is executed
                         return generated_image, conversational_text, combined_usage
 
-            text = self._extract_text_from_response(response)
-            return None, text, usage
+                if not tool_executor:
+                    text = self._extract_text_from_response(response)
+                    return None, text, combined_usage
+
+                serialized_calls, tool_messages, discovered_image_urls = await self._execute_non_image_tool_calls(tool_calls, tool_executor)
+                if not serialized_calls:
+                    text = self._extract_text_from_response(response)
+                    return None, text, combined_usage
+                tool_result_image_urls.extend(discovered_image_urls)
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.content or "",
+                        "tool_calls": serialized_calls,
+                    }
+                )
+                messages.extend(tool_messages)
+
+            logger.warning(
+                "Chat tool-calling exhausted after %s rounds for prompt %r with %s messages accumulated",
+                round_number,
+                prompt,
+                len(messages),
+            )
+            return None, (
+                f"Unable to complete that request after {MAX_CHAT_TOOL_CALL_ROUNDS} tool call rounds. "
+                "Please simplify your request or try again."
+            ), combined_usage
             
         except Exception as e:
             logger.error(f"Error generating text response: {e}")
@@ -626,9 +844,9 @@ class ChatModelGenerator(BaseModelGenerator):
             all_images.extend(additional_images)
         return await self._generate_text_response(generic_prompt, all_images)
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response, potentially including an image if the model calls the image generation tool."""
-        return await self._generate_text_response(prompt, input_images)
+        return await self._generate_text_response(prompt, input_images, tool_executor)
 
 
 # Factory function to get the appropriate generator
