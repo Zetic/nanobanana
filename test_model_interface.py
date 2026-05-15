@@ -234,13 +234,13 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         mock_chat.completions.create.return_value = chat_response
         mock_client = SimpleNamespace(chat=mock_chat)
 
-        async def fake_tool_executor(tool_name, args):
+        async def noop_tool_executor(tool_name, args):
             return {"ok": True}
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
              patch.object(model_interface, "OpenAI", return_value=mock_client):
             generator = model_interface.ChatModelGenerator()
-            await generator._generate_text_response("hello", tool_executor=fake_tool_executor)
+            await generator._generate_text_response("hello", tool_executor=noop_tool_executor)
 
         call_kwargs = mock_chat.completions.create.call_args.kwargs
         tool_names = {tool["function"]["name"] for tool in call_kwargs["tools"]}
@@ -266,7 +266,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         mock_chat.completions.create.side_effect = [first_response, second_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
-        async def fake_tool_executor(tool_name, args):
+        async def user_info_tool_executor(tool_name, args):
             self.assertEqual(tool_name, "get_discord_user_info")
             self.assertEqual(args, {"user_id": "<@123>"})
             return {"ok": True, "user": {"id": "123", "display_name": "Alice"}}
@@ -276,7 +276,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
             generator = model_interface.ChatModelGenerator()
             image, text, usage = await generator._generate_text_response(
                 "who is <@123>?",
-                tool_executor=fake_tool_executor,
+                tool_executor=user_info_tool_executor,
             )
 
         self.assertIsNone(image)
@@ -306,7 +306,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         mock_chat.completions.create.side_effect = [first_response, second_response]
         mock_client = SimpleNamespace(chat=mock_chat)
 
-        async def fake_tool_executor(tool_name, args):
+        async def search_users_tool_executor(tool_name, args):
             self.assertEqual(tool_name, "search_discord_users")
             self.assertEqual(args, {})
             return {"ok": True, "users": []}
@@ -316,7 +316,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
             generator = model_interface.ChatModelGenerator()
             image, text, usage = await generator._generate_text_response(
                 "find users named Alice",
-                tool_executor=fake_tool_executor,
+                tool_executor=search_users_tool_executor,
             )
 
         self.assertIsNone(image)
@@ -338,7 +338,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         mock_chat.completions.create.side_effect = [looping_response] * model_interface.MAX_CHAT_TOOL_CALL_ROUNDS
         mock_client = SimpleNamespace(chat=mock_chat)
 
-        async def fake_tool_executor(tool_name, args):
+        async def list_users_tool_executor(tool_name, args):
             return {"ok": True, "users": []}
 
         with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
@@ -347,7 +347,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
             generator = model_interface.ChatModelGenerator()
             image, text, usage = await generator._generate_text_response(
                 "list everyone",
-                tool_executor=fake_tool_executor,
+                tool_executor=list_users_tool_executor,
             )
 
         self.assertIsNone(image)

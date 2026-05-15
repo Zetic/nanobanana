@@ -551,7 +551,7 @@ class ChatModelGenerator(BaseModelGenerator):
                 "total_token_count": 0,
             }
 
-    def _merge_usage_metadata(self, *usage_items: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _accumulate_usage_metadata(self, *usage_items: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Merge usage metadata objects by summing standard token counters.
 
         Known token counters are summed across calls. Any extra metadata keys are copied
@@ -729,7 +729,7 @@ class ChatModelGenerator(BaseModelGenerator):
                     )
                 )
 
-                combined_usage = self._merge_usage_metadata(combined_usage, self._extract_usage_from_response(response))
+                combined_usage = self._accumulate_usage_metadata(combined_usage, self._extract_usage_from_response(response))
 
                 message = response.choices[0].message if response.choices else None
                 tool_calls = list(getattr(message, "tool_calls", None) or [])
@@ -755,7 +755,7 @@ class ChatModelGenerator(BaseModelGenerator):
                             image_prompt, image_model, input_images
                         )
 
-                        combined_usage = self._merge_usage_metadata(combined_usage, image_usage)
+                        combined_usage = self._accumulate_usage_metadata(combined_usage, image_usage)
                         combined_usage["image_model_used"] = image_model
 
                         conversational_text = await self._generate_image_followup_text(prompt)

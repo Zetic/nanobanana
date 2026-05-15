@@ -39,6 +39,7 @@ bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_c
 # Structure: {message_id: {'content': str, 'author_id': int, 'channel_id': int, 'timestamp': datetime}}
 tracked_messages: Dict[int, Dict[str, Any]] = {}
 DEFAULT_SNITCH_CONTENT = "use me"  # Fallback text when message only contained bot mention
+# Reused for parsing mentioned users out of model tool-call arguments such as "<@123>".
 USER_MENTION_PATTERN = re.compile(r"<@!?(\d+)>")
 
 # Discord embed character limits
