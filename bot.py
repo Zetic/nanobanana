@@ -32,6 +32,7 @@ if config.DEBUG_LOGGING:
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_command=None)
 
 # Bot snitching feature - track messages that mention the bot
@@ -74,6 +75,149 @@ def build_embed_footer(elapsed_seconds: float) -> str:
     """Build the standard embed footer: 'ZPT <hash> | Thought for <time>'."""
     version = f"ZPT {_git_commit_hash}" if _git_commit_hash else "ZPT"
     return f"{version} | Thought for {format_elapsed_time(elapsed_seconds)}"
+
+
+def parse_discord_user_id(user_reference: Any) -> Optional[int]:
+    """Parse a Discord user ID from a raw snowflake or mention string."""
+    if user_reference is None:
+        return None
+    if isinstance(user_reference, int):
+        return user_reference
+
+    match = re.search(r"<@!?(\d+)>", str(user_reference).strip())
+    if match:
+        return int(match.group(1))
+
+    digits_only = re.sub(r"\D", "", str(user_reference).strip())
+    if digits_only:
+        return int(digits_only)
+    return None
+
+
+def build_discord_user_payload(user: discord.abc.User, member: Optional[discord.Member] = None) -> Dict[str, Any]:
+    """Build a structured payload for Discord user/member tool responses."""
+    display_avatar = getattr(user, "display_avatar", None)
+    guild_avatar = getattr(member, "guild_avatar", None) if member else None
+    payload = {
+        "id": str(user.id),
+        "username": user.name,
+        "display_name": getattr(user, "display_name", user.name),
+        "global_name": getattr(user, "global_name", None),
+        "mention": getattr(user, "mention", f"<@{user.id}>"),
+        "bot": getattr(user, "bot", False),
+        "avatar_url": display_avatar.url if display_avatar else None,
+    }
+    if member:
+        payload.update(
+            {
+                "nickname": member.nick,
+                "guild_avatar_url": guild_avatar.url if guild_avatar else None,
+                "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+                "roles": [role.name for role in getattr(member, "roles", []) if getattr(role, "name", None) != "@everyone"],
+            }
+        )
+    return payload
+
+
+async def get_all_guild_members(guild: Optional[discord.Guild]) -> List[discord.Member]:
+    """Return all available members for a guild, preferring an API fetch when possible."""
+    if guild is None:
+        return []
+
+    members_by_id = {member.id: member for member in getattr(guild, "members", [])}
+    fetch_members = getattr(guild, "fetch_members", None)
+    if fetch_members:
+        try:
+            async for member in fetch_members(limit=None):
+                members_by_id[member.id] = member
+        except (discord.Forbidden, discord.HTTPException, TypeError):
+            logger.warning("Unable to fetch full guild member list for guild %s", guild.id)
+    return list(members_by_id.values())
+
+
+async def resolve_discord_user(message: discord.Message, user_reference: Any) -> Tuple[Optional[discord.abc.User], Optional[discord.Member]]:
+    """Resolve a Discord user/member from a snowflake ID or mention."""
+    user_id = parse_discord_user_id(user_reference)
+    if user_id is None:
+        return None, None
+
+    guild = getattr(message, "guild", None)
+    member = guild.get_member(user_id) if guild else None
+    if member is None and guild:
+        try:
+            member = await guild.fetch_member(user_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            member = None
+
+    user = member
+    if user is None:
+        user = bot.get_user(user_id)
+    if user is None:
+        try:
+            user = await bot.fetch_user(user_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            user = None
+
+    return user, member
+
+
+async def execute_discord_tool_for_message(message: discord.Message, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a Discord lookup tool for the current message context."""
+    guild = getattr(message, "guild", None)
+
+    if tool_name == "get_discord_user_avatar":
+        user, member = await resolve_discord_user(message, args.get("user_id"))
+        if not user:
+            return {"ok": False, "error": "User not found."}
+        payload = build_discord_user_payload(user, member)
+        return {"ok": True, "user": payload, "avatar_url": payload.get("avatar_url")}
+
+    if tool_name == "get_discord_user_info":
+        user, member = await resolve_discord_user(message, args.get("user_id"))
+        if not user:
+            return {"ok": False, "error": "User not found."}
+        return {"ok": True, "user": build_discord_user_payload(user, member)}
+
+    if guild is None:
+        return {"ok": False, "error": "This Discord server lookup tool can only be used inside a server."}
+
+    if tool_name == "list_discord_users":
+        members = await get_all_guild_members(guild)
+        return {
+            "ok": True,
+            "guild_id": str(guild.id),
+            "guild_name": guild.name,
+            "total_users": len(members),
+            "users": [build_discord_user_payload(member, member) for member in members],
+        }
+
+    if tool_name == "search_discord_users":
+        query = str(args.get("query", "")).strip().lower()
+        if not query:
+            return {"ok": False, "error": "A non-empty search query is required."}
+
+        matched_users = []
+        for member in await get_all_guild_members(guild):
+            searchable_values = {
+                str(member.id),
+                member.name.lower(),
+                member.display_name.lower(),
+                (member.global_name or "").lower(),
+                (member.nick or "").lower(),
+            }
+            if any(query in value for value in searchable_values if value):
+                matched_users.append(build_discord_user_payload(member, member))
+
+        return {
+            "ok": True,
+            "guild_id": str(guild.id),
+            "guild_name": guild.name,
+            "query": query,
+            "total_matches": len(matched_users),
+            "users": matched_users,
+        }
+
+    return {"ok": False, "error": f"Unsupported Discord tool '{tool_name}'."}
 
 
 def cleanup_old_tracked_messages():
@@ -445,7 +589,11 @@ async def handle_conversation_request(message):
 
         generator = get_model_generator("chat")
         start_time = time.monotonic()
-        generated_image, text_response, usage_metadata = await generator.generate_text_only_response(text_content, images if images else None)
+        generated_image, text_response, usage_metadata = await generator.generate_text_only_response(
+            text_content,
+            images if images else None,
+            tool_executor=lambda tool_name, args: execute_discord_tool_for_message(message, tool_name, args),
+        )
 
         if usage_metadata and not message.author.bot:
             prompt_tokens = usage_metadata.get("prompt_token_count", 0)

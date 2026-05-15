@@ -103,6 +103,122 @@ class TestBotHelpers(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(usage)
 
 
+class TestDiscordToolHelpers(unittest.IsolatedAsyncioTestCase):
+    def test_parse_discord_user_id_accepts_mentions(self):
+        self.assertEqual(bot.parse_discord_user_id("<@!123456789>"), 123456789)
+        self.assertEqual(bot.parse_discord_user_id("123456789"), 123456789)
+        self.assertIsNone(bot.parse_discord_user_id("not-a-user"))
+
+    async def test_execute_discord_tool_gets_user_avatar(self):
+        avatar = SimpleNamespace(url="https://cdn.example.com/avatar.png")
+        member = SimpleNamespace(
+            id=123,
+            name="alice",
+            display_name="Alice",
+            global_name="Alice Global",
+            mention="<@123>",
+            bot=False,
+            display_avatar=avatar,
+            guild_avatar=None,
+            nick="Ali",
+            joined_at=None,
+            roles=[],
+        )
+        message = MagicMock()
+        message.guild = None
+
+        with patch("bot.resolve_discord_user", AsyncMock(return_value=(member, member))):
+            result = await bot.execute_discord_tool_for_message(
+                message,
+                "get_discord_user_avatar",
+                {"user_id": "<@123>"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["avatar_url"], "https://cdn.example.com/avatar.png")
+        self.assertEqual(result["user"]["id"], "123")
+
+    async def test_execute_discord_tool_lists_users(self):
+        member_one = SimpleNamespace(
+            id=1,
+            name="alice",
+            display_name="Alice",
+            global_name=None,
+            mention="<@1>",
+            bot=False,
+            display_avatar=SimpleNamespace(url="https://cdn.example.com/alice.png"),
+            guild_avatar=None,
+            nick=None,
+            joined_at=None,
+            roles=[],
+        )
+        member_two = SimpleNamespace(
+            id=2,
+            name="bob",
+            display_name="Bobby",
+            global_name="Bob",
+            mention="<@2>",
+            bot=False,
+            display_avatar=SimpleNamespace(url="https://cdn.example.com/bob.png"),
+            guild_avatar=None,
+            nick="B",
+            joined_at=None,
+            roles=[],
+        )
+        guild = SimpleNamespace(id=987, name="Test Guild")
+        message = MagicMock()
+        message.guild = guild
+
+        with patch("bot.get_all_guild_members", AsyncMock(return_value=[member_one, member_two])):
+            result = await bot.execute_discord_tool_for_message(message, "list_discord_users", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["total_users"], 2)
+        self.assertEqual([user["id"] for user in result["users"]], ["1", "2"])
+
+    async def test_execute_discord_tool_searches_users(self):
+        member_one = SimpleNamespace(
+            id=1,
+            name="alice",
+            display_name="Alice",
+            global_name=None,
+            mention="<@1>",
+            bot=False,
+            display_avatar=SimpleNamespace(url="https://cdn.example.com/alice.png"),
+            guild_avatar=None,
+            nick=None,
+            joined_at=None,
+            roles=[],
+        )
+        member_two = SimpleNamespace(
+            id=2,
+            name="charlie",
+            display_name="Chuck",
+            global_name=None,
+            mention="<@2>",
+            bot=False,
+            display_avatar=SimpleNamespace(url="https://cdn.example.com/chuck.png"),
+            guild_avatar=None,
+            nick="CoolBob",
+            joined_at=None,
+            roles=[],
+        )
+        guild = SimpleNamespace(id=987, name="Test Guild")
+        message = MagicMock()
+        message.guild = guild
+
+        with patch("bot.get_all_guild_members", AsyncMock(return_value=[member_one, member_two])):
+            result = await bot.execute_discord_tool_for_message(
+                message,
+                "search_discord_users",
+                {"query": "bob"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["total_matches"], 1)
+        self.assertEqual(result["users"][0]["id"], "2")
+
+
 def _make_attachment(filename="img.png", content_type="image/png", url="http://example.com/img.png"):
     """Create a minimal mock Discord attachment."""
     a = MagicMock()
@@ -266,6 +382,26 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
         images_sent = call_args[0][1]
         self.assertIsNotNone(images_sent)
         self.assertIn(fake_img, images_sent)
+
+    async def test_discord_tool_executor_passed_to_chat_generator(self):
+        """Conversation requests pass a Discord tool executor into the chat generator."""
+        user_msg = _make_message(content="who is <@123>?", attachments=[])
+        user_msg.reference = None
+
+        response_msg = AsyncMock()
+        user_msg.reply = AsyncMock(return_value=response_msg)
+
+        mock_generator = MagicMock()
+        mock_generator.generate_text_only_response = AsyncMock(return_value=(None, "That is Alice.", {}))
+
+        with patch("bot.get_model_generator", return_value=mock_generator), \
+             patch("bot.extract_text_from_message", AsyncMock(return_value="who is <@123>?")), \
+             patch("bot.download_image", AsyncMock(return_value=None)):
+            await bot.handle_conversation_request(user_msg)
+
+        call_kwargs = mock_generator.generate_text_only_response.call_args.kwargs
+        self.assertIn("tool_executor", call_kwargs)
+        self.assertTrue(callable(call_kwargs["tool_executor"]))
 
     async def test_images_from_replied_message_passed(self):
         """Image attachments on the replied-to message are forwarded to the model."""

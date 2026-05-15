@@ -226,6 +226,70 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertIn("gemini", params["model"]["enum"])
         self.assertIn("gpt", params["model"]["enum"])
 
+    async def test_chat_completions_include_discord_tools_when_executor_provided(self):
+        """Discord lookup tools are exposed when a tool executor is available."""
+        chat_response = self._make_chat_response(tool_calls=None, content="hi")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.return_value = chat_response
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        async def fake_tool_executor(tool_name, args):
+            return {"ok": True}
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            await generator._generate_text_response("hello", tool_executor=fake_tool_executor)
+
+        call_kwargs = mock_chat.completions.create.call_args.kwargs
+        tool_names = {tool["function"]["name"] for tool in call_kwargs["tools"]}
+        self.assertIn("generate_image", tool_names)
+        self.assertIn("get_discord_user_avatar", tool_names)
+        self.assertIn("search_discord_users", tool_names)
+        self.assertIn("list_discord_users", tool_names)
+        self.assertIn("get_discord_user_info", tool_names)
+
+    async def test_discord_tool_call_executes_and_returns_followup_text(self):
+        """Discord tool results are sent back through chat completions for a final answer."""
+        tool_call = SimpleNamespace(
+            id="call_123",
+            function=SimpleNamespace(
+                name="get_discord_user_info",
+                arguments=json.dumps({"user_id": "<@123>"}),
+            ),
+        )
+        first_response = self._make_chat_response(tool_calls=[tool_call], content=None)
+        second_response = self._make_chat_response(tool_calls=None, content="That user is Alice.")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = [first_response, second_response]
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        async def fake_tool_executor(tool_name, args):
+            self.assertEqual(tool_name, "get_discord_user_info")
+            self.assertEqual(args, {"user_id": "<@123>"})
+            return {"ok": True, "user": {"id": "123", "display_name": "Alice"}}
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            image, text, usage = await generator._generate_text_response(
+                "who is <@123>?",
+                tool_executor=fake_tool_executor,
+            )
+
+        self.assertIsNone(image)
+        self.assertEqual(text, "That user is Alice.")
+        self.assertEqual(usage["total_token_count"], 14)
+
+        second_call_messages = mock_chat.completions.create.call_args_list[1].kwargs["messages"]
+        self.assertEqual(second_call_messages[-2]["role"], "assistant")
+        self.assertEqual(second_call_messages[-2]["tool_calls"][0]["function"]["name"], "get_discord_user_info")
+        self.assertEqual(second_call_messages[-1]["role"], "tool")
+        self.assertEqual(second_call_messages[-1]["tool_call_id"], "call_123")
+        self.assertIn('"display_name": "Alice"', second_call_messages[-1]["content"])
+
     async def test_execute_image_generation_tool_gemini(self):
         """_execute_image_generation_tool without images delegates to generate_image_from_text."""
         fake_image = Image.new("RGB", (2, 2))
