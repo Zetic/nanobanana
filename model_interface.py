@@ -552,7 +552,11 @@ class ChatModelGenerator(BaseModelGenerator):
             }
 
     def _merge_usage_metadata(self, *usage_items: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Merge usage metadata objects by summing numeric fields."""
+        """Merge usage metadata objects by summing standard token counters.
+
+        Known token counters are summed across calls. Any extra metadata keys are copied
+        through, with later values overwriting earlier ones.
+        """
         merged = {
             "prompt_token_count": 0,
             "candidates_token_count": 0,
@@ -715,7 +719,7 @@ class ChatModelGenerator(BaseModelGenerator):
             }
             tools = self._build_available_tools(tool_executor)
 
-            for _ in range(MAX_CHAT_TOOL_CALL_ROUNDS):
+            for round_number in range(1, MAX_CHAT_TOOL_CALL_ROUNDS + 1):
                 response = await asyncio.to_thread(
                     lambda: self.client.chat.completions.create(
                         model=self.text_only_model,
@@ -775,6 +779,12 @@ class ChatModelGenerator(BaseModelGenerator):
                 )
                 messages.extend(tool_messages)
 
+            logger.warning(
+                "Chat tool-calling exhausted after %s rounds for prompt %r with %s messages accumulated",
+                round_number,
+                prompt,
+                len(messages),
+            )
             return None, (
                 f"Unable to complete that request after {MAX_CHAT_TOOL_CALL_ROUNDS} tool call rounds. "
                 "Please simplify your request or try again."

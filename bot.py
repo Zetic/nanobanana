@@ -39,6 +39,7 @@ bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents, help_c
 # Structure: {message_id: {'content': str, 'author_id': int, 'channel_id': int, 'timestamp': datetime}}
 tracked_messages: Dict[int, Dict[str, Any]] = {}
 DEFAULT_SNITCH_CONTENT = "use me"  # Fallback text when message only contained bot mention
+USER_MENTION_PATTERN = re.compile(r"<@!?(\d+)>")
 
 # Discord embed character limits
 EMBED_DESCRIPTION_MAX_LENGTH = 4096
@@ -84,7 +85,7 @@ def parse_discord_user_id(user_reference: Any) -> Optional[int]:
     if isinstance(user_reference, int):
         return user_reference
 
-    match = re.search(r"<@!?(\d+)>", str(user_reference).strip())
+    match = USER_MENTION_PATTERN.search(str(user_reference).strip())
     if match:
         return int(match.group(1))
 
@@ -120,13 +121,17 @@ def build_discord_user_payload(user: discord.abc.User, member: Optional[discord.
 
 
 async def get_all_guild_members(guild: Optional[discord.Guild]) -> List[discord.Member]:
-    """Return all available members for a guild, preferring an API fetch when possible."""
+    """Return all available members for a guild.
+
+    Cached members are kept so partially populated caches still contribute results, and
+    a full fetch is only attempted when the guild is not chunked yet.
+    """
     if guild is None:
         return []
 
     members_by_id = {member.id: member for member in guild.members}
     fetch_members = getattr(guild, "fetch_members", None)
-    if fetch_members:
+    if fetch_members and not guild.chunked:
         try:
             async for member in fetch_members(limit=None):
                 members_by_id[member.id] = member
@@ -163,7 +168,11 @@ async def resolve_discord_user(message: discord.Message, user_reference: Any) ->
 
 
 async def execute_discord_tool_for_message(message: discord.Message, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a Discord lookup tool for the current message context."""
+    """Execute a Discord lookup tool for the current message context.
+
+    Server-wide search is a linear scan across the available guild members because Discord
+    does not expose a lighter-weight local search primitive here.
+    """
     guild = getattr(message, "guild", None)
 
     if tool_name == "get_discord_user_avatar":
