@@ -579,13 +579,13 @@ class ChatModelGenerator(BaseModelGenerator):
             tools.extend(DISCORD_TOOLS)
         return tools
 
-    def _build_system_prompt(self, include_discord_tools: bool = False) -> str:
+    def _build_system_prompt(self, discord_tools_available: bool = False) -> str:
         """Build the system prompt for conversational responses."""
         prompt = (
             "You are a helpful Discord assistant. Reply in plain text only. "
             "Use the generate_image tool when the user requests image creation, generation, or editing."
         )
-        if include_discord_tools:
+        if discord_tools_available:
             prompt += (
                 " When the user asks about Discord users or server membership, use the available Discord tools "
                 "to look up the real data instead of guessing or hallucinating."
@@ -705,7 +705,7 @@ class ChatModelGenerator(BaseModelGenerator):
             messages = [
                 {
                     "role": "system",
-                    "content": self._build_system_prompt(include_discord_tools=tool_executor is not None),
+                    "content": self._build_system_prompt(discord_tools_available=tool_executor is not None),
                 },
                 {
                     "role": "user",

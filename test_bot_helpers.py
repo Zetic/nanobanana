@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import bot
 
 
@@ -217,6 +218,22 @@ class TestDiscordToolHelpers(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual(result["users"][0]["id"], "2")
+
+    async def test_get_all_guild_members_returns_cached_members_when_fetch_fails(self):
+        cached_member = SimpleNamespace(id=1)
+        guild = MagicMock()
+        guild.members = [cached_member]
+        guild.chunked = False
+
+        async def failing_fetch_members(limit=None):
+            raise discord.Forbidden(MagicMock(), "forbidden")
+            yield  # pragma: no cover
+
+        guild.fetch_members = failing_fetch_members
+
+        members = await bot.get_all_guild_members(guild)
+
+        self.assertEqual(members, [cached_member])
 
 
 def _make_attachment(filename="img.png", content_type="image/png", url="http://example.com/img.png"):

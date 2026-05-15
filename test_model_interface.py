@@ -290,6 +290,74 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_call_messages[-1]["tool_call_id"], "call_123")
         self.assertIn('"display_name": "Alice"', second_call_messages[-1]["content"])
 
+    async def test_discord_tool_call_with_bad_json_uses_empty_args(self):
+        """Malformed tool-call JSON falls back to an empty args dict instead of failing."""
+        tool_call = SimpleNamespace(
+            id="call_bad_json",
+            function=SimpleNamespace(
+                name="search_discord_users",
+                arguments="{not-json",
+            ),
+        )
+        first_response = self._make_chat_response(tool_calls=[tool_call], content=None)
+        second_response = self._make_chat_response(tool_calls=None, content="No matching users were found.")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = [first_response, second_response]
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        async def fake_tool_executor(tool_name, args):
+            self.assertEqual(tool_name, "search_discord_users")
+            self.assertEqual(args, {})
+            return {"ok": True, "users": []}
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client):
+            generator = model_interface.ChatModelGenerator()
+            image, text, usage = await generator._generate_text_response(
+                "find users named Alice",
+                tool_executor=fake_tool_executor,
+            )
+
+        self.assertIsNone(image)
+        self.assertEqual(text, "No matching users were found.")
+        self.assertEqual(usage["total_token_count"], 14)
+
+    async def test_tool_call_round_limit_returns_fallback_text(self):
+        """Repeated non-image tool calls eventually return the round-limit fallback message."""
+        tool_call = SimpleNamespace(
+            id="call_loop",
+            function=SimpleNamespace(
+                name="list_discord_users",
+                arguments="{}",
+            ),
+        )
+        looping_response = self._make_chat_response(tool_calls=[tool_call], content=None)
+
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = [looping_response] * model_interface.MAX_CHAT_TOOL_CALL_ROUNDS
+        mock_client = SimpleNamespace(chat=mock_chat)
+
+        async def fake_tool_executor(tool_name, args):
+            return {"ok": True, "users": []}
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"), \
+             patch.object(model_interface, "OpenAI", return_value=mock_client), \
+             patch.object(model_interface.logger, "warning") as mock_warning:
+            generator = model_interface.ChatModelGenerator()
+            image, text, usage = await generator._generate_text_response(
+                "list everyone",
+                tool_executor=fake_tool_executor,
+            )
+
+        self.assertIsNone(image)
+        self.assertEqual(
+            text,
+            "Unable to complete that request after 4 tool call rounds. Please simplify your request or try again.",
+        )
+        self.assertEqual(usage["total_token_count"], 28)
+        mock_warning.assert_called()
+
     async def test_execute_image_generation_tool_gemini(self):
         """_execute_image_generation_tool without images delegates to generate_image_from_text."""
         fake_image = Image.new("RGB", (2, 2))
