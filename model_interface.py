@@ -501,6 +501,7 @@ DISCORD_TOOLS = [
 ]
 
 DISCORD_TOOL_NAMES = {tool["function"]["name"] for tool in DISCORD_TOOLS}
+MAX_CHAT_TOOL_CALL_ROUNDS = 4
 
 
 class ChatModelGenerator(BaseModelGenerator):
@@ -714,7 +715,7 @@ class ChatModelGenerator(BaseModelGenerator):
             }
             tools = self._build_available_tools(tool_executor)
 
-            for _ in range(4):
+            for _ in range(MAX_CHAT_TOOL_CALL_ROUNDS):
                 response = await asyncio.to_thread(
                     lambda: self.client.chat.completions.create(
                         model=self.text_only_model,
@@ -774,7 +775,10 @@ class ChatModelGenerator(BaseModelGenerator):
                 )
                 messages.extend(tool_messages)
 
-            return None, "I couldn't complete that request after several tool calls. Please try again.", combined_usage
+            return None, (
+                f"Unable to complete that request after {MAX_CHAT_TOOL_CALL_ROUNDS} tool call rounds. "
+                "Please simplify your request or try again."
+            ), combined_usage
             
         except Exception as e:
             logger.error(f"Error generating text response: {e}")

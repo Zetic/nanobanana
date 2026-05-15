@@ -124,13 +124,14 @@ async def get_all_guild_members(guild: Optional[discord.Guild]) -> List[discord.
     if guild is None:
         return []
 
-    members_by_id = {member.id: member for member in getattr(guild, "members", [])}
+    members_by_id = {member.id: member for member in guild.members}
     fetch_members = getattr(guild, "fetch_members", None)
     if fetch_members:
         try:
             async for member in fetch_members(limit=None):
                 members_by_id[member.id] = member
         except (discord.Forbidden, discord.HTTPException, TypeError):
+            # Some test doubles patch fetch_members with a non-async-iterator mock, which raises TypeError.
             logger.warning("Unable to fetch full guild member list for guild %s", guild.id)
     return list(members_by_id.values())
 
