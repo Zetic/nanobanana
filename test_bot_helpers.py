@@ -537,10 +537,9 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(images_sent)
         self.assertIn(fake_img, images_sent)
 
-    async def test_usage_tracked_when_image_generated(self):
-        """record_usage is called with images_generated=1 when the tool returns an image."""
+    async def test_usage_tracked_as_text_only_when_image_generated(self):
+        """record_usage keeps images_generated=0 when mention flow returns an image."""
         from PIL import Image as PILImage
-        import io
 
         fake_img = PILImage.new("RGB", (1, 1))
         usage_meta = {
@@ -574,7 +573,7 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
         mock_tracker.record_usage.assert_called_once()
         call_kwargs = mock_tracker.record_usage.call_args.kwargs
         self.assertEqual(call_kwargs["user_id"], 123)
-        self.assertEqual(call_kwargs["images_generated"], 1)
+        self.assertEqual(call_kwargs["images_generated"], 0)
         self.assertEqual(call_kwargs["prompt_tokens"], 5)
         self.assertEqual(call_kwargs["total_tokens"], 7)
 
@@ -611,8 +610,8 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
         call_kwargs = mock_tracker.record_usage.call_args.kwargs
         self.assertEqual(call_kwargs["images_generated"], 0)
 
-    async def test_model_footer_appended_for_gpt_image(self):
-        """When gpt image tool fires, response includes '-# *Used GPT Image 2 in Xs*'."""
+    async def test_generated_image_from_mention_flow_is_not_sent(self):
+        """Mention/reply flow never sends generated images, even if model returns one."""
         from PIL import Image as PILImage
 
         fake_img = PILImage.new("RGB", (1, 1))
@@ -645,13 +644,13 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
             await bot.handle_conversation_request(user_msg)
 
         response_msg.edit.assert_awaited_once()
-        content_sent = response_msg.edit.call_args.kwargs.get("content", "")
-        self.assertIn("Here is your dog!", content_sent)
-        self.assertIn("GPT Image 2", content_sent)
-        self.assertIn("-# *Used GPT Image 2 in", content_sent)
+        edit_kwargs = response_msg.edit.call_args.kwargs
+        content_sent = edit_kwargs.get("content", "")
+        self.assertEqual(content_sent, "Here is your dog!")
+        self.assertNotIn("attachments", edit_kwargs)
 
-    async def test_model_footer_appended_for_gemini_image(self):
-        """When gemini image tool fires, response includes '-# *Used Gemini in Xs*'."""
+    async def test_model_footer_not_appended_when_image_generation_disabled_for_mentions(self):
+        """No image-generation footer is added in mention/reply flow."""
         from PIL import Image as PILImage
 
         fake_img = PILImage.new("RGB", (1, 1))
@@ -684,8 +683,40 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
             await bot.handle_conversation_request(user_msg)
 
         content_sent = response_msg.edit.call_args.kwargs.get("content", "")
-        self.assertIn("Gemini", content_sent)
-        self.assertIn("-# *Used Gemini in", content_sent)
+        self.assertEqual(content_sent, "Sky painted!")
+
+    async def test_image_only_result_returns_command_guidance(self):
+        """If mention/reply returns only an image, user is guided to slash image commands."""
+        from PIL import Image as PILImage
+
+        fake_img = PILImage.new("RGB", (1, 1))
+        usage_meta = {"total_token_count": 1}
+
+        author = MagicMock()
+        author.id = 333
+        author.bot = False
+        author.display_name = "User4"
+        author.name = "user4"
+        user_msg = _make_message(content="make image", attachments=[])
+        user_msg.reference = None
+        user_msg.author = author
+
+        response_msg = AsyncMock()
+        user_msg.reply = AsyncMock(return_value=response_msg)
+
+        mock_generator = MagicMock()
+        mock_generator.generate_text_only_response = AsyncMock(return_value=(fake_img, None, usage_meta))
+
+        with patch("bot.get_model_generator", return_value=mock_generator), \
+             patch("bot.extract_text_from_message", AsyncMock(return_value="make image")), \
+             patch("bot.download_image", AsyncMock(return_value=None)), \
+             patch("bot.usage_tracker"):
+            await bot.handle_conversation_request(user_msg)
+
+        content_sent = response_msg.edit.call_args.kwargs.get("content", "")
+        self.assertIn("Image generation from mentions/replies is disabled", content_sent)
+        self.assertIn("/gemini-image", content_sent)
+        self.assertIn("/gpt-image", content_sent)
 
     async def test_no_footer_when_no_model_recorded(self):
         """When image_model_used is absent from usage, no footer is appended."""
