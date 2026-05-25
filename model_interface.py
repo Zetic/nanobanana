@@ -40,7 +40,13 @@ class BaseModelGenerator(ABC):
         pass
         
     @abstractmethod
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(
+        self,
+        prompt: str,
+        input_images: Optional[List[Image.Image]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        allow_image_generation: bool = True,
+    ) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response. Returns (image_or_none, text_response, usage_metadata). The image is non-None only when the implementation supports tool-based image generation."""
         pass
 
@@ -203,7 +209,13 @@ class GeminiModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating image from image only: {e}")
             return None, None, None
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(
+        self,
+        prompt: str,
+        input_images: Optional[List[Image.Image]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        allow_image_generation: bool = True,
+    ) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response for rate-limited users."""
         try:
             # For text-only responses with images, include the images so the model can analyze them
@@ -367,7 +379,13 @@ class GPTModelGenerator(BaseModelGenerator):
             all_images.extend(additional_images)
         return await self._generate_image_with_input_images(generic_prompt, all_images, streaming_callback)
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(
+        self,
+        prompt: str,
+        input_images: Optional[List[Image.Image]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        allow_image_generation: bool = True,
+    ) -> Tuple[None, Optional[str], Optional[Dict[str, Any]]]:
         """Generate text-only response. GPT Image API doesn't support text-only, so return a simple response."""
         try:
             # Since this is the image model, we can't generate text-only responses
@@ -573,9 +591,15 @@ class ChatModelGenerator(BaseModelGenerator):
                     merged[key] = value
         return merged
 
-    def _build_available_tools(self, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> List[Dict[str, Any]]:
+    def _build_available_tools(
+        self,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        allow_image_generation: bool = True,
+    ) -> List[Dict[str, Any]]:
         """Return the tools that should be exposed to the chat model."""
-        tools = [IMAGE_GENERATION_TOOL]
+        tools = []
+        if allow_image_generation:
+            tools.append(IMAGE_GENERATION_TOOL)
         if tool_executor:
             tools.extend(DISCORD_TOOLS)
         return tools
@@ -706,7 +730,13 @@ class ChatModelGenerator(BaseModelGenerator):
             logger.error(f"Error generating follow-up text after image generation: {e}")
             return None
 
-    async def _generate_text_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def _generate_text_response(
+        self,
+        prompt: str,
+        input_images: Optional[List[Image.Image]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        allow_image_generation: bool = True,
+    ) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response using OpenAI GPT-5.4 mini with image generation tool support."""
         try:
             if input_images:
@@ -739,7 +769,7 @@ class ChatModelGenerator(BaseModelGenerator):
                 "candidates_token_count": 0,
                 "total_token_count": 0,
             }
-            tools = self._build_available_tools(tool_executor)
+            tools = self._build_available_tools(tool_executor, allow_image_generation=allow_image_generation)
             tool_result_image_urls: List[str] = []
 
             for round_number in range(1, MAX_CHAT_TOOL_CALL_ROUNDS + 1):
@@ -844,9 +874,15 @@ class ChatModelGenerator(BaseModelGenerator):
             all_images.extend(additional_images)
         return await self._generate_text_response(generic_prompt, all_images)
     
-    async def generate_text_only_response(self, prompt: str, input_images: Optional[List[Image.Image]] = None, tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
+    async def generate_text_only_response(
+        self,
+        prompt: str,
+        input_images: Optional[List[Image.Image]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        allow_image_generation: bool = True,
+    ) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate a response, potentially including an image if the model calls the image generation tool."""
-        return await self._generate_text_response(prompt, input_images, tool_executor)
+        return await self._generate_text_response(prompt, input_images, tool_executor, allow_image_generation=allow_image_generation)
 
 
 # Factory function to get the appropriate generator

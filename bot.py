@@ -557,6 +557,12 @@ async def collect_message_images(message) -> List[Image.Image]:
 
 async def handle_conversation_request(message):
     """Handle text-only conversational responses for mentions/replies."""
+    reserved_slots = 0
+    usage_consumed = False
+    usage_limit_message = None
+    author_name = str(
+        (getattr(message.author, "display_name", None) or getattr(message.author, "name", None) or "Unknown User")
+    )
     try:
         response_message = await message.reply("Thinking...")
         text_content = await extract_text_from_message(message)
@@ -598,12 +604,34 @@ async def handle_conversation_request(message):
             await response_message.edit(content="Please include some text or an image in your message.")
             return
 
+        allow_image_generation = True
+        if not usage_tracker.is_elevated_user(message.author.id):
+            reservation_successful, next_available = usage_tracker.reserve_usage_slots(
+                message.author.id,
+                slots=1,
+                username=author_name,
+            )
+            if reservation_successful:
+                reserved_slots = 1
+            else:
+                allow_image_generation = False
+                if next_available:
+                    time_until_available = next_available - datetime.now()
+                    hours = int(time_until_available.total_seconds() // 3600)
+                    minutes = int((time_until_available.total_seconds() % 3600) // 60)
+                    usage_limit_message = (
+                        f"⏰ You've reached your usage limit. Please try again in {hours}h {minutes}m."
+                    )
+                else:
+                    usage_limit_message = "⏰ You've reached your usage limit. Please try again later."
+
         generator = get_model_generator("chat")
         start_time = time.monotonic()
         generated_image, text_response, usage_metadata = await generator.generate_text_only_response(
             text_content,
             images if images else None,
             tool_executor=lambda tool_name, args: execute_discord_tool_for_message(message, tool_name, args),
+            allow_image_generation=allow_image_generation,
         )
 
         if usage_metadata and not message.author.bot:
@@ -613,14 +641,22 @@ async def handle_conversation_request(message):
             images_generated = 1 if generated_image else 0
             usage_tracker.record_usage(
                 user_id=message.author.id,
-                username=message.author.display_name or message.author.name,
+                username=author_name,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 images_generated=images_generated,
+                consume_reserved_slots=images_generated,
                 channel_id=message.channel.id,
                 channel_name=getattr(message.channel, 'name', None),
             )
+            usage_consumed = images_generated > 0
+
+        if usage_limit_message and not generated_image:
+            if text_response and text_response.strip():
+                text_response = f"{usage_limit_message}\n\n{text_response}"
+            else:
+                text_response = usage_limit_message
 
         if not generated_image and (not text_response or not text_response.strip()):
             await response_message.edit(content="I couldn't generate a response. Please try again.")
@@ -649,6 +685,9 @@ async def handle_conversation_request(message):
     except Exception as e:
         logger.error(f"Error handling conversation request: {e}")
         await message.reply("An error occurred while processing your request. Please try again.")
+    finally:
+        if reserved_slots > 0 and not usage_consumed:
+            usage_tracker.release_reserved_usage_slots(message.author.id, slots=reserved_slots)
 
 
 async def generate_image_for_model(model_type: str, text_content: str, images: List, aspect_ratio: Optional[str] = None):
