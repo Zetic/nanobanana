@@ -606,12 +606,6 @@ async def handle_conversation_request(message):
             tool_executor=lambda tool_name, args: execute_discord_tool_for_message(message, tool_name, args),
         )
 
-        if generated_image:
-            logger.info("Ignoring generated image from mention/reply conversation flow; image generation is command-only.")
-            generated_image = None
-            if not text_response or not text_response.strip():
-                text_response = "Image generation from mentions/replies is disabled. Use `/gemini-image` or `/gpt-image`."
-
         if usage_metadata and not message.author.bot:
             prompt_tokens = usage_metadata.get("prompt_token_count", 0)
             output_tokens = usage_metadata.get("candidates_token_count", 0)
