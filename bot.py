@@ -604,8 +604,8 @@ async def handle_conversation_request(message):
             await response_message.edit(content="Please include some text or an image in your message.")
             return
 
-        allow_image_generation = True
-        if not usage_tracker.is_elevated_user(message.author.id):
+        allow_image_generation = not (message.reference and message.reference.message_id)
+        if allow_image_generation and not usage_tracker.is_elevated_user(message.author.id):
             reservation_successful, next_available = usage_tracker.reserve_usage_slots(
                 message.author.id,
                 slots=1,

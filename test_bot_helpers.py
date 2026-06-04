@@ -571,6 +571,37 @@ class TestHandleConversationRequest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("usage limit", content_sent.lower())
         mock_tracker.release_reserved_usage_slots.assert_not_called()
 
+    async def test_reply_disables_image_generation_without_usage_reservation(self):
+        """Reply-triggered conversations are always text-only and skip usage-slot reservation."""
+        reference = MagicMock()
+        reference.message_id = 123
+        reference.cached_message = None
+
+        author = MagicMock()
+        author.id = 1003
+        author.bot = False
+        author.display_name = "ReplyUser"
+        author.name = "replyuser"
+
+        user_msg = _make_message(content="please continue", attachments=[], reference=reference)
+        user_msg.author = author
+
+        response_msg = AsyncMock()
+        user_msg.reply = AsyncMock(return_value=response_msg)
+
+        mock_generator = MagicMock()
+        mock_generator.generate_text_only_response = AsyncMock(return_value=(None, "Continuing...", {}))
+
+        with patch("bot.get_model_generator", return_value=mock_generator), \
+             patch("bot.extract_text_from_message", AsyncMock(return_value="please continue")), \
+             patch("bot.download_image", AsyncMock(return_value=None)), \
+             patch("bot.usage_tracker") as mock_tracker:
+            await bot.handle_conversation_request(user_msg)
+
+        call_kwargs = mock_generator.generate_text_only_response.call_args.kwargs
+        self.assertFalse(call_kwargs["allow_image_generation"])
+        mock_tracker.reserve_usage_slots.assert_not_called()
+
     async def test_conversation_consumes_reserved_slot_when_image_generated(self):
         """Successful mention image generation consumes the pre-reserved usage slot."""
         from PIL import Image as PILImage
