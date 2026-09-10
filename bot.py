@@ -766,7 +766,7 @@ I'm a multi-model bot for conversational text and image generation.
 **Slash Commands:**
 • `/help` - Show this help message
 • `/gemini-image` - Generate/edit images with Gemini (prompt + optional image attachments)
-• `/gpt-image` - Generate/edit images with OpenAI gpt-image-2 (prompt + optional image attachments)
+• `/gpt-image` - Generate/edit images with OpenAI gpt-image-2.5-sunburst (prompt + optional image attachments)
 • `/wordplay` - Play a word puzzle game! Guess the extra letter between two words (1 puzzle every 8 hours)
 • `/avatar` - Transform your avatar with themed templates (Halloween, Christmas, New Year). Optionally specify a user to transform their avatar instead.
 • `/usage` - Show token usage statistics (elevated users only)
@@ -948,7 +948,7 @@ async def gemini_image_slash(
     await run_image_command(interaction, "nanobanana", prompt, image_1, image_2, image_3, image_4)
 
 
-@bot.tree.command(name='gpt-image', description='Generate or edit images with OpenAI gpt-image-2')
+@bot.tree.command(name='gpt-image', description='Generate or edit images with OpenAI gpt-image-2.5-sunburst')
 @app_commands.describe(
     prompt='Prompt for image generation/editing (supports -16:9 style aspect ratio flags)',
     image_1='Optional first image attachment',
@@ -964,7 +964,7 @@ async def gpt_image_slash(
     image_3: Optional[discord.Attachment] = None,
     image_4: Optional[discord.Attachment] = None
 ):
-    """Generate/edit images with OpenAI gpt-image-2."""
+    """Generate/edit images with OpenAI gpt-image-2.5-sunburst."""
     await run_image_command(interaction, "gpt", prompt, image_1, image_2, image_3, image_4)
 
 @bot.tree.command(name='usage', description='Show token usage statistics (elevated users only)')
@@ -1541,11 +1541,11 @@ class WordplayAnswerView(discord.ui.View):
     word_length='Minimum length for the shorter word (default: 4)',
     letter_difference='Number of letters to add/remove (default: 1)',
     style='Art style for the images (e.g., "anime", "watercolor"). Default is graphite pencil sketch.',
-    model='Image model to use for generating puzzle images (default: gpt-image-2)'
+    model='Image model to use for generating puzzle images (default: gpt-image-2.5-sunburst)'
 )
 @app_commands.choices(model=[
     app_commands.Choice(name='Gemini Flash Image (gemini-2.5-flash-image)', value='gemini'),
-    app_commands.Choice(name='GPT Image 2 (gpt-image-2)', value='gpt'),
+    app_commands.Choice(name='GPT Image 2.5 Sunburst (gpt-image-2.5-sunburst)', value='gpt'),
 ])
 async def wordplay_slash(
     interaction: discord.Interaction,

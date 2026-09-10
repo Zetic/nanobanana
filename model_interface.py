@@ -252,14 +252,14 @@ class GeminiModelGenerator(BaseModelGenerator):
 
 
 class GPTModelGenerator(BaseModelGenerator):
-    """Handles OpenAI image generation using the gpt-image-2 model."""
+    """Handles OpenAI image generation using the gpt-image-2.5-sunburst model."""
     
     def __init__(self):
         if not config.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
         
         self.client = OpenAI(api_key=config.OPENAI_API_KEY)
-        self.model = "gpt-image-2"
+        self.model = "gpt-image-2.5-sunburst"
     
     async def _generate_image_only(self, prompt: str, streaming_callback=None) -> Tuple[Optional[Image.Image], Optional[str], Optional[Dict[str, Any]]]:
         """Generate image from text prompt using OpenAI Image API."""
@@ -293,7 +293,7 @@ class GPTModelGenerator(BaseModelGenerator):
             return generated_image, text_response, usage_metadata
             
         except Exception as e:
-            logger.error(f"Error generating image with gpt-image-2: {e}")
+            logger.error(f"Error generating image with gpt-image-2.5-sunburst: {e}")
             error_reason = str(e).strip() or "Unknown error"
             return None, f"❌ Failed to generate image.\nAttempted prompt: {prompt}\nReason: {error_reason}", None
     

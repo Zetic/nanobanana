@@ -1,12 +1,12 @@
 # 🍌 Nano Banana Discord Bot
 
-A multi-model Discord bot with text chat via OpenAI GPT-5.4 mini and image generation via Gemini and OpenAI gpt-image-2.
+A multi-model Discord bot with text chat via OpenAI GPT-5.4 mini and image generation via Gemini and OpenAI gpt-image-2.5-sunburst.
 
 ## ✨ Features
 
 - **Conversational Mentions/Replies**: Mention the bot or reply to the bot for text-only GPT-5.4 mini responses
 - **Gemini Image Command**: `/gemini-image` supports prompt-only and prompt+image workflows
-- **OpenAI Image Command**: `/gpt-image` supports prompt-only and prompt+image workflows using `gpt-image-2`. Prompt-only generation uses the Images API (`quality=medium`), while image-input workflows use the Responses API image generation tool.
+- **OpenAI Image Command**: `/gpt-image` supports prompt-only and prompt+image workflows using `gpt-image-2.5-sunburst`. Prompt-only generation uses the Images API (`quality=medium`), while image-input workflows use the Responses API image generation tool.
 - **Multi-Image Processing**: Process multiple images in image commands
 - **Aspect Ratio Control**: Specify output aspect ratios (16:9, 21:9, 1:1, 9:16, etc.)
 - **Bot Snitching**: Catches users who delete messages that mentioned the bot (within 8 hours) and playfully calls them out
@@ -87,7 +87,7 @@ Mentions/replies are text-only chat. Use slash image commands for image generati
 **Slash Commands (use with `/` prefix):**
 - `/help` - Show help information
 - `/gemini-image` - Generate/edit images with Gemini (prompt + optional images)
-- `/gpt-image` - Generate/edit images with OpenAI gpt-image-2 (prompt + optional images)
+- `/gpt-image` - Generate/edit images with OpenAI gpt-image-2.5-sunburst (prompt + optional images)
 - `/avatar` - Transform your avatar with themed templates
 - `/usage` - Show token usage statistics (elevated users only)
 - `/log` - Get the most recent log file (elevated users only)
@@ -217,7 +217,7 @@ The bot uses multiple AI providers:
 
 **OpenAI:**
 - **Conversational Chat**: Mentions/replies use GPT-5.4 mini
-- **Image Generation**: `/gpt-image` uses `gpt-image-2`
+- **Image Generation**: `/gpt-image` uses `gpt-image-2.5-sunburst`
 
 ## 📝 Examples
 
