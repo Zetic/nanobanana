@@ -64,7 +64,7 @@ Python 3.8+ is required (uses `asyncio`, `typing`, dataclasses, etc.).
 ### AI Model Layer (`model_interface.py`)
 
 - All model access goes through `BaseModelGenerator` (abstract). Never call Gemini/OpenAI SDKs directly from `bot.py`.
-- `GeminiModelGenerator` uses `gemini-2.5-flash-image` for image generation and `gemini-2.5-flash` for text-only responses.
+- `GeminiModelGenerator` uses `gemini-3.1-flash-lite-image` for image generation and `gemini-2.5-flash` for text-only responses.
 - `GPTModelGenerator` uses:
   - `gpt-image-2.5-sunburst` via `client.images.generate(quality="medium")` for **text-prompt-only** image generation.
   - `gpt-5.4` + Responses API (`client.responses.create`) with `{"type": "image_generation", "model": "gpt-image-2.5-sunburst"}` tool for **image-input** workflows.
