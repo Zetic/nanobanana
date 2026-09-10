@@ -69,6 +69,7 @@ Python 3.8+ is required (uses `asyncio`, `typing`, dataclasses, etc.).
   - `gpt-image-2.5-sunburst` via `client.images.generate(quality="medium")` for **text-prompt-only** image generation.
   - `gpt-5.4` + Responses API (`client.responses.create`) with `{"type": "image_generation", "model": "gpt-image-2.5-sunburst"}` tool for **image-input** workflows.
   - `gpt-5.4-mini` (chat completions) for conversational replies.
+- Mention-driven image requests default to the GPT image path unless the user explicitly requests Gemini/Google.
 - The factory function `get_model_generator(model_name)` in `model_interface.py` returns the right instance.
 - All generator methods return a `(image: PIL.Image | None, text: str | None, usage_metadata: dict | None)` tuple.
 - **Do not** pass `stream`, `response_format`, or `partial_images` to either the images or responses API – these parameters are unsupported and intentionally omitted (see `test_model_interface.py`).
