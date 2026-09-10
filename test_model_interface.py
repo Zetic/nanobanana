@@ -184,6 +184,37 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertIs(image, fake_image)
         self.assertEqual(text, "Here's the blue sky image!")
 
+    async def test_tool_call_without_model_defaults_to_gpt(self):
+        """A generated image tool call without a model must fall back to GPT."""
+        tool_call = SimpleNamespace(
+            function=SimpleNamespace(
+                name="generate_image",
+                arguments=json.dumps({"prompt": "a green pear"}),
+            )
+        )
+        chat_response = self._make_chat_response(tool_calls=[tool_call])
+        followup_response = self._make_chat_response(tool_calls=None, content="Here is the pear image!")
+
+        mock_chat = Mock()
+        mock_chat.completions.create.side_effect = [chat_response, followup_response]
+        mock_client = SimpleNamespace(chat=mock_chat)
+        fake_image = Image.new("RGB", (1, 1))
+
+        with patch.object(model_interface.config, "OPENAI_API_KEY", "test-key"):
+            with patch.object(model_interface, "OpenAI", return_value=mock_client):
+                generator = model_interface.ChatModelGenerator()
+                with patch.object(
+                    generator,
+                    "_execute_image_generation_tool",
+                    new=AsyncMock(return_value=(fake_image, "a green pear", {"prompt_token_count": 2, "candidates_token_count": 0, "total_token_count": 2})),
+                ) as mock_exec:
+                    image, text, usage = await generator._generate_text_response("draw a green pear")
+
+        mock_exec.assert_awaited_once_with("a green pear", "gpt", None)
+        self.assertIs(image, fake_image)
+        self.assertEqual(text, "Here is the pear image!")
+        self.assertEqual(usage["image_model_used"], "gpt")
+
     async def test_no_tool_call_returns_text_only(self):
         """When the model returns plain text (no tool call), the image is None."""
         chat_response = self._make_chat_response(tool_calls=None, content="Hello, world!")
@@ -225,6 +256,7 @@ class TestChatModelGeneratorToolCalling(unittest.IsolatedAsyncioTestCase):
         self.assertIn("model", params)
         self.assertIn("gemini", params["model"]["enum"])
         self.assertIn("gpt", params["model"]["enum"])
+        self.assertIn("Default to 'gpt'", params["model"]["description"])
 
     async def test_chat_completions_include_discord_tools_when_executor_provided(self):
         """Discord lookup tools are exposed when a tool executor is available."""

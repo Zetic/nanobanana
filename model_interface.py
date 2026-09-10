@@ -428,7 +428,7 @@ IMAGE_GENERATION_TOOL = {
                     "enum": ["gemini", "gpt"],
                     "description": (
                         "The AI model to use for image generation. "
-                        "Always default to 'gemini' unless the user explicitly requests GPT or OpenAI."
+                        "Default to 'gpt' unless the user explicitly requests Gemini or Google."
                     ),
                 },
             },
@@ -608,7 +608,8 @@ class ChatModelGenerator(BaseModelGenerator):
         """Build the system prompt for conversational responses."""
         prompt = (
             "You are a helpful Discord assistant. Reply in plain text only. "
-            "Use the generate_image tool when the user requests image creation, generation, or editing."
+            "Use the generate_image tool when the user requests image creation, generation, or editing. "
+            "Default image generation to GPT unless the user explicitly requests Gemini or Google."
         )
         if discord_tools_available:
             prompt += (
@@ -801,8 +802,8 @@ class ChatModelGenerator(BaseModelGenerator):
 
                         image_model = args.get("model")
                         if not image_model:
-                            logger.warning("generate_image tool call missing 'model'; defaulting to 'gemini'")
-                            image_model = "gemini"
+                            logger.warning("generate_image tool call missing 'model'; defaulting to 'gpt'")
+                            image_model = "gpt"
 
                         tool_images = await self._download_tool_result_images(tool_result_image_urls)
                         generation_input_images = list(input_images or [])
