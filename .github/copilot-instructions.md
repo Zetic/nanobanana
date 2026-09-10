@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Nano Banana** is a Python-based Discord bot that provides multi-model AI capabilities: conversational text chat (OpenAI GPT), image generation and editing (Google Gemini and OpenAI gpt-image-2), a wordplay puzzle game, usage/rate-limiting per user, and a "bot snitching" feature. The bot is built on `discord.py` (v2.4.0) with `app_commands` for slash-command support.
+**Nano Banana** is a Python-based Discord bot that provides multi-model AI capabilities: conversational text chat (OpenAI GPT), image generation and editing (Google Gemini and OpenAI gpt-image-2.5-sunburst), a wordplay puzzle game, usage/rate-limiting per user, and a "bot snitching" feature. The bot is built on `discord.py` (v2.4.0) with `app_commands` for slash-command support.
 
 ---
 
@@ -38,7 +38,7 @@ nanobanana/
 |---|---|
 | `DISCORD_TOKEN` | Discord bot token |
 | `GOOGLE_API_KEY` | Google GenAI API key (Gemini) |
-| `OPENAI_API_KEY` | OpenAI API key (GPT chat + gpt-image-2) |
+| `OPENAI_API_KEY` | OpenAI API key (GPT chat + gpt-image-2.5-sunburst) |
 | `ELEVATED_USERS` | Comma-separated Discord user IDs with admin/unlimited access |
 | `DEBUG_LOGGING` | `true`/`false` – enable verbose logging (default: `false`) |
 
@@ -66,8 +66,8 @@ Python 3.8+ is required (uses `asyncio`, `typing`, dataclasses, etc.).
 - All model access goes through `BaseModelGenerator` (abstract). Never call Gemini/OpenAI SDKs directly from `bot.py`.
 - `GeminiModelGenerator` uses `gemini-2.5-flash-image` for image generation and `gemini-2.5-flash` for text-only responses.
 - `GPTModelGenerator` uses:
-  - `gpt-image-2` via `client.images.generate(quality="medium")` for **text-prompt-only** image generation.
-  - `gpt-5.4` + Responses API (`client.responses.create`) with `{"type": "image_generation", "model": "gpt-image-2"}` tool for **image-input** workflows.
+  - `gpt-image-2.5-sunburst` via `client.images.generate(quality="medium")` for **text-prompt-only** image generation.
+  - `gpt-5.4` + Responses API (`client.responses.create`) with `{"type": "image_generation", "model": "gpt-image-2.5-sunburst"}` tool for **image-input** workflows.
   - `gpt-5.4-mini` (chat completions) for conversational replies.
 - The factory function `get_model_generator(model_name)` in `model_interface.py` returns the right instance.
 - All generator methods return a `(image: PIL.Image | None, text: str | None, usage_metadata: dict | None)` tuple.
@@ -137,7 +137,7 @@ Tests mock external API calls (Google GenAI, OpenAI) so no real API keys are nee
 
 2. **Slash command sync delay** – Newly added slash commands may take up to an hour to appear globally in Discord even after a successful `tree.sync()`. For faster testing, sync to a specific guild.
 
-3. **`gpt-image-2` via Responses API does not accept `quality`, `stream`, or `response_format`** – Only pass `model`, `tools`, and `input`. See `GPTModelGenerator._generate_image_with_input_images` and `test_model_interface.py`.
+3. **Keep the Responses API image-edit path minimal** – The current `gpt-image-2.5-sunburst` integration intentionally passes only `model`, `tools`, and `input`, preserving the existing edit/reference workflow. See `GPTModelGenerator._generate_image_with_input_images` and `test_model_interface.py`.
 
 4. **Thread safety for `usage_stats.json`** – Always go through `UsageTracker` methods; never read/write the JSON file directly. The internal `_lock` is per-process; do not run multiple bot instances sharing the same file.
 

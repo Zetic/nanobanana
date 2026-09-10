@@ -41,7 +41,7 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         mock_to_thread.assert_awaited_once()
 
         kwargs = mock_images.generate.call_args.kwargs
-        self.assertEqual(kwargs["model"], "gpt-image-2")
+        self.assertEqual(kwargs["model"], "gpt-image-2.5-sunburst")
         self.assertEqual(kwargs["prompt"], "banana")
         self.assertEqual(kwargs["quality"], "medium")
         self.assertNotIn("seed", kwargs)
@@ -76,7 +76,7 @@ class TestGPTModelGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(kwargs["tools"]), 1)
         tool = kwargs["tools"][0]
         self.assertEqual(tool["type"], "image_generation")
-        self.assertEqual(tool["model"], "gpt-image-2")
+        self.assertEqual(tool["model"], "gpt-image-2.5-sunburst")
         self.assertNotIn("seed", tool)
         self.assertEqual(kwargs["input"][0]["role"], "user")
         self.assertEqual(kwargs["input"][0]["content"][0], {"type": "input_text", "text": "edit banana"})
